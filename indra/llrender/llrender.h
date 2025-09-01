@@ -492,6 +492,9 @@ public:
     static bool sNsightDebugSupport;
     static LLVector2 sUIGLScaleFactor;
     static bool sClassicMode; // classic sky mode active
+    
+    // State optimization logging - public access for performance monitoring
+    void logStateOptimizationStats();
 
 private:
     friend class LLLightState;
@@ -535,6 +538,67 @@ private:
 
     std::vector<LLVector3> mUIOffset;
     std::vector<LLVector3> mUIScale;
+    
+    // OpenGL State Management Optimization
+    bool mStateOptimizationEnabled;
+    
+    // Cached GL state to avoid redundant state changes
+    struct GLStateCache
+    {
+        GLenum mCachedDepthFunc;
+        GLboolean mCachedDepthTest;
+        GLboolean mCachedDepthMask;
+        GLenum mCachedBlendSrc;
+        GLenum mCachedBlendDst;
+        GLboolean mCachedBlend;
+        GLenum mCachedCullFace;
+        GLboolean mCachedCullFaceEnable;
+        GLfloat mCachedLineWidth;
+        GLboolean mCachedScissorTest;
+        GLint mCachedScissorBox[4];
+        U32 mCachedActiveTexture;
+        
+        // State change counters for performance monitoring
+        U32 mDepthFuncChanges;
+        U32 mBlendChanges;
+        U32 mTextureChanges;
+        U32 mTotalStateChanges;
+        U32 mRedundantStateCalls;
+        
+        GLStateCache() : 
+            mCachedDepthFunc(GL_LESS),
+            mCachedDepthTest(GL_FALSE),
+            mCachedDepthMask(GL_TRUE),
+            mCachedBlendSrc(GL_ONE),
+            mCachedBlendDst(GL_ZERO),
+            mCachedBlend(GL_FALSE),
+            mCachedCullFace(GL_BACK),
+            mCachedCullFaceEnable(GL_FALSE),
+            mCachedLineWidth(1.0f),
+            mCachedScissorTest(GL_FALSE),
+            mCachedActiveTexture(GL_TEXTURE0),
+            mDepthFuncChanges(0),
+            mBlendChanges(0),
+            mTextureChanges(0),
+            mTotalStateChanges(0),
+            mRedundantStateCalls(0)
+        {
+            mCachedScissorBox[0] = mCachedScissorBox[1] = mCachedScissorBox[2] = mCachedScissorBox[3] = 0;
+        }
+    } mGLStateCache;
+    
+    // State optimization methods
+    void initializeStateOptimization();
+    void optimizedDepthFunc(GLenum func);
+    void optimizedEnable(GLenum cap);
+    void optimizedDisable(GLenum cap);
+    void optimizedBlendFunc(GLenum sfactor, GLenum dfactor);
+    void optimizedActiveTexture(GLenum texture);
+    void optimizedLineWidth(GLfloat width);
+    void optimizedScissor(GLint x, GLint y, GLsizei width, GLsizei height);
+    void optimizedDepthMask(GLboolean flag);
+    void flushStateCache();
+    void resetStateCache();
 };
 
 extern F32 gGLModelView[16];

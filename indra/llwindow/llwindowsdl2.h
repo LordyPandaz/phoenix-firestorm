@@ -71,6 +71,27 @@ public:
     void makeContextCurrent(void* context) override;
     void destroySharedContext(void* context) override;
     /*virtual*/ void toggleVSync(bool enable_vsync);
+    // Enhanced VSync reliability methods
+    bool verifyVSyncState(bool expected_state);
+    void forceVSyncRecovery();
+    bool isVSyncSupported();
+    int getCurrentSwapInterval();
+    
+    // Advanced Frame Pacing System
+    void initializeFramePacing();
+    void updateFramePacing();
+    void applyFramePacing();
+    bool shouldSkipFrame();
+    void recordFrameTime(F64 frame_time);
+    void adjustTargetFrameTime();
+    
+    // Multi-Monitor VSync Support
+    void initializeMultiMonitorVSync();
+    void detectMonitorConfiguration();
+    void updateMonitorRefreshRates();
+    void synchronizeMultiMonitorVSync();
+    S32 getCurrentMonitor();
+    F64 calculateOptimalSyncTarget();
     // </FS:Zi>
     /*virtual*/ bool setCursorPosition(LLCoordWindow position);
     /*virtual*/ bool getCursorPosition(LLCoordWindow *position);
@@ -208,6 +229,35 @@ protected:
     SDL_Cursor* mSDLCursors[UI_CURSOR_COUNT];
     LLPreeditor* mPreeditor;
     bool mIMEEnabled;
+
+    // VSync reliability tracking
+    bool mVSyncEnabled;
+    int mCurrentSwapInterval;
+    int mLastVerifiedSwapInterval;
+    F64 mLastVSyncVerifyTime;
+    
+    // Advanced Frame Pacing System
+    bool mFramePacingEnabled;
+    F64 mTargetFrameTime;
+    F64 mLastFrameTime;
+    F64 mFrameTimeAccumulator;
+    F64 mAverageFrameTime;
+    F64 mFrameVariance;
+    U32 mFrameCount;
+    U32 mConsecutiveFastFrames;
+    U32 mConsecutiveSlowFrames;
+    F64 mLastPacingAdjustment;
+    bool mAdaptivePacingEnabled;
+    
+    // Multi-Monitor VSync Support
+    bool mMultiMonitorVSyncEnabled;
+    S32 mPrimaryMonitorIndex;
+    S32 mCurrentMonitorIndex;
+    std::vector<S32> mMonitorRefreshRates;
+    F64 mMultiMonitorSyncTarget;
+    bool mCrossMonitorSyncDetected;
+    F64 mMinFrameTime;
+    F64 mMaxFrameTime;
 
     std::string mWindowTitle;
     double      mOriginalAspectRatio;

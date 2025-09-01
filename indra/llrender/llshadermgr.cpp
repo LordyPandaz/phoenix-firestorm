@@ -706,8 +706,8 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
         }
         else if (major_version > 1 || minor_version >= 30)
         {  //switches are supported in GLSL 1.30 and later
-            if (gGLManager.mIsNVIDIA)
-            { //switches are unreliable on some NVIDIA drivers
+            if (gGLManager.mIsNVIDIA && gGLManager.mDriverVersionMajor < 300)
+            { //switches are unreliable on old NVIDIA drivers (pre-300 series)
                 for (S32 i = 0; i < texture_index_channels; ++i)
                 {
                     std::string if_string = llformat("\t%sif (vary_texture_index == %d) { return texture(tex%d, texcoord); }\n", i > 0 ? "else " : "", i, i);

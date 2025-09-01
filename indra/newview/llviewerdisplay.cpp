@@ -86,6 +86,7 @@
 #include "llvograss.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "llwindowsdl2.h"
 
 #include <boost/json.hpp>
 // [RLVa:KB] - Checked: 2011-05-22 (RLVa-1.3.1a)
@@ -1682,9 +1683,52 @@ void swap()
     LLPerfStats::RecordSceneTime T ( LLPerfStats::StatType_t::RENDER_SWAP ); // render time capture - Swap buffer time - can signify excessive data transfer to/from GPU
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Swap");
     LL_PROFILE_GPU_ZONE("swap");
+    
+    // Update frame pacing system before swap
+    if (auto* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow()))
+    {
+        sdl_window->updateFramePacing();
+        
+        // Check if we should skip this frame to maintain pacing
+        if (sdl_window->shouldSkipFrame())
+        {
+            return; // Skip rendering this frame
+        }
+    }
+    
+    // Update GPU memory pressure monitoring
+    static LLFrameTimer memory_pressure_timer;
+    if (memory_pressure_timer.getElapsedTimeF32() > 2.0f) // Check every 2 seconds
+    {
+        gGLManager.updateMemoryPressure();
+        memory_pressure_timer.reset();
+    }
+    
+    // Update shader cache statistics
+    static LLFrameTimer shader_cache_timer;
+    if (shader_cache_timer.getElapsedTimeF32() > 30.0f) // Check every 30 seconds
+    {
+        gGLManager.updateShaderCacheStats();
+        shader_cache_timer.reset();
+    }
+    
+    // Log state optimization statistics periodically
+    static LLFrameTimer state_optimization_timer;
+    if (state_optimization_timer.getElapsedTimeF32() > 120.0f) // Every 2 minutes
+    {
+        gGL.logStateOptimizationStats();
+        state_optimization_timer.reset();
+    }
+    
     if (gDisplaySwapBuffers)
     {
         gViewerWindow->getWindow()->swapBuffers();
+        
+        // Apply frame pacing after swap
+        if (auto* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow()))
+        {
+            sdl_window->applyFramePacing();
+        }
     }
     gDisplaySwapBuffers = true;
 }

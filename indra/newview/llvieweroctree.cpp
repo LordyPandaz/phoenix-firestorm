@@ -1135,9 +1135,15 @@ void LLOcclusionCullingGroup::checkOcclusion()
                 mOcclusionCheckCount[LLViewerCamera::sCurCameraID]++;
             }
 
-            static LLCachedControl<U32> occlusion_timeout(gSavedSettings, "RenderOcclusionTimeout", 4);
+            // Improved timeout with exponential backoff for better GPU performance
+            // Base timeout increased from 4 to 8 frames, with exponential backoff
+            static LLCachedControl<U32> occlusion_base_timeout(gSavedSettings, "RenderOcclusionTimeout", 8);
+            
+            // Calculate dynamic timeout: start at base, double every 4 failed checks up to 32 frames max
+            U32 check_count = mOcclusionCheckCount[LLViewerCamera::sCurCameraID];
+            U32 dynamic_timeout = llmin(occlusion_base_timeout() * (1 << (check_count / 4)), 32U);
 
-            if (available || mOcclusionCheckCount[LLViewerCamera::sCurCameraID] > occlusion_timeout)
+            if (available || check_count > dynamic_timeout)
             {
                 mOcclusionCheckCount[LLViewerCamera::sCurCameraID] = 0;
                 GLuint query_result;    // Will be # samples drawn, or a boolean depending on mHasOcclusionQuery2 (both are type GLuint)
