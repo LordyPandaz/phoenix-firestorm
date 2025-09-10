@@ -4895,6 +4895,17 @@
       <key>Value</key>
       <integer>0</integer>
     </map>
+    <key>MouseWarpMode</key>
+    <map>
+      <key>Comment</key>
+      <string>Controls mouse warping behavior. 0=Auto (based on system capabilities), 1=Always warp, 2=Never warp</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>DisableExternalBrowser</key>
     <map>
       <key>Comment</key>

@@ -122,6 +122,8 @@ public:
     virtual ECursorType getNextCursor() const { return mNextCursor; };
     virtual void updateCursor() = 0;
 
+    virtual bool isWrapMouse() const { return false; }
+
     virtual void captureMouse() = 0;
     virtual void releaseMouse() = 0;
     virtual void setMouseClipping( bool b ) = 0;
@@ -206,6 +208,10 @@ public:
     };
 
     virtual S32 getRefreshRate() { return mRefreshRate; }
+    virtual int getCurrentSwapInterval() { return 0; } // Default: no VSync diagnostic info
+    
+    // XWayland compatibility
+    virtual bool isRunningUnderXWayland() const { return false; }
 protected:
     LLWindow(LLWindowCallbacks* callbacks, bool fullscreen, U32 flags);
     virtual ~LLWindow();

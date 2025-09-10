@@ -92,6 +92,12 @@ public:
     S32 mMaxUniformBlockSize = 0;
     S32 mMaxVaryingVectors = 0;
 
+    // GPU Performance Monitoring
+    U32 mGPUFrameCount = 0;
+    F64 mGPUFrameTime = 0.0;
+    U32 mGLErrorCount = 0;
+    F64 mLastFrameTime = 0.0;
+
     // GL 4.x capabilities
     bool mHasCubeMapArray = false;
     bool mHasDebugOutput = false;
@@ -102,6 +108,12 @@ public:
     bool mHasAMDAssociations = false;
     bool mHasNVXGpuMemoryInfo = false;
     bool mHasATIMemInfo = false;
+    
+    // Enhanced texture compression support
+    bool mHasS3TC = false;      // S3TC/DXT compression
+    bool mHasRGTC = false;      // RGTC compression (better for normal maps)
+    bool mHasBPTC = false;      // BPTC compression (high quality, modern)
+    bool mHasASTC = false;      // ASTC compression (mobile/modern)
 
     bool mIsAMD;
     bool mIsNVIDIA;
@@ -130,11 +142,75 @@ public:
 
     U32 mVRAM; // VRAM in MB
     S32 mVRAMDetected; // <FS:Beq/> The amount detected/reported by the OS/Drivers. If different to mVRAM there is an override in place.
+    
+    // Runtime VRAM monitoring
+    U32 mCurrentVRAM = 0; // Currently available VRAM in MB
+    U32 mLastEvictionCount = 0; // Last known eviction count for pressure detection
+    U32 mTextureEvictionCount = 0; // Total texture evictions since startup
+    F64 mLastEvictionCheck = 0.0; // Last time we checked for evictions
+    
+    // GPU Memory Pressure Management
+    bool mMemoryPressureDetected = false;
+    F64 mLastMemoryPressureCheck = 0.0;
+    U32 mMemoryPressureLevel = 0; // 0=None, 1=Low, 2=Medium, 3=High, 4=Critical
+    U32 mTextureMemoryBudget = 0; // Dynamic texture memory budget in MB
+    U32 mTextureMemoryUsed = 0; // Current texture memory usage in MB
+    F64 mMemoryPressureThreshold = 0.85; // Trigger pressure handling at 85% usage
+    
+    // Context loss detection
+    bool mContextLost = false;
     std::string getGLInfoString();
     void printGLInfoString();
     void getGLInfo(LLSD& info);
 
     void asLLSD(LLSD& info);
+    
+    // VRAM monitoring functions
+    bool checkVRAMPressure();
+    void updateVRAMStats();
+    U32 getCurrentVRAM();
+    U32 getEvictionCount();
+    
+    // Shader Cache System
+    bool mShaderCacheEnabled = true;
+    std::string mShaderCacheDir;
+    U32 mShaderCacheHits = 0;
+    U32 mShaderCacheMisses = 0;
+    U32 mShaderCacheSize = 0; // Size in KB
+    U32 mMaxShaderCacheSize = 256 * 1024; // Max 256MB cache
+    F64 mLastShaderCacheCleanup = 0.0;
+    
+    void initializeShaderCache();
+    bool loadShaderFromCache(const std::string& hash, std::string& vertex_source, std::string& fragment_source);
+    void saveShaderToCache(const std::string& hash, const std::string& vertex_source, const std::string& fragment_source);
+    std::string generateShaderHash(const std::string& vertex_source, const std::string& fragment_source);
+    void cleanupShaderCache();
+    void validateShaderCache();
+    std::string getShaderCachePath(const std::string& hash);
+    void updateShaderCacheStats();
+    
+    // GSP Firmware Detection (Nvidia)
+    bool mGSPFirmwareDetected = false;
+    bool mGSPFirmwareEnabled = false;
+    std::string mGSPFirmwareVersion;
+    
+    void detectGSPFirmware();
+    bool isGSPFirmwarePresent();
+    std::string getGSPFirmwareInfo();
+    
+    // GPU Memory Pressure Management
+    void initializeMemoryPressureSystem();
+    void updateMemoryPressure();
+    bool isMemoryPressureDetected() const { return mMemoryPressureDetected; }
+    U32 getMemoryPressureLevel() const { return mMemoryPressureLevel; }
+    void handleMemoryPressure(U32 level);
+    bool requestTextureMemory(U32 size_mb);
+    void releaseTextureMemory(U32 size_mb);
+    void emergencyMemoryCleanup();
+    
+    // Context loss detection
+    bool checkContextLoss();
+    void handleContextLoss();
 
     // In ALL CAPS
     std::string mGLVendor;
@@ -162,6 +238,16 @@ void assert_glerror();
 
 void clear_glerror();
 
+// Enhanced GPU error handling and recovery
+bool validate_gl_state(); // Validate current OpenGL state consistency
+bool recover_from_gl_error(GLenum error); // Attempt to recover from specific GL errors  
+void log_gpu_diagnostics(); // Log comprehensive GPU diagnostic information
+bool check_framebuffer_status_safe(); // Safe framebuffer completeness check with recovery
+
+// GPU Performance Monitoring
+void update_gpu_performance_stats(); // Update frame time and error statistics
+void reset_gpu_performance_stats(); // Reset performance counters
+void log_gpu_performance_summary(); // Log performance summary
 
 # define stop_glerror() assert_glerror()
 # define llglassertok() assert_glerror()

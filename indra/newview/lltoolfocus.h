@@ -63,15 +63,17 @@ protected:
 protected:
     S32     mAccumX;
     S32     mAccumY;
-    S32     mMouseDownX;
+    S32     mMouseDownX;            // Screen coordinates
     S32     mMouseDownY;
+    S32     mMouseDownWindowX;      // Window coordinates for XWayland
+    S32     mMouseDownWindowY;
     bool    mOutsideSlopX;
     bool    mOutsideSlopY;
     bool    mValidClickPoint;
     bool    mClickPickPending;
     bool    mValidSelection;
     bool    mMouseSteering;
-    S32     mMouseUpX;  // needed for releaseMouse()
+    S32     mMouseUpX;              // needed for releaseMouse()
     S32     mMouseUpY;
     MASK    mMouseUpMask;
 };

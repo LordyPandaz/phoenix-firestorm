@@ -33,6 +33,7 @@
 #include "v3math.h"
 #include "llfontgl.h"
 #include "llui.h"
+#include <unistd.h>  // For usleep()
 
 // Viewer includes
 #include "llagent.h"
@@ -41,6 +42,7 @@
 #include "llviewercontrol.h"
 #include "llviewerinput.h"//<FS:JL> Mouse movement by Singularity
 #include "lldrawable.h"
+#include <cstdlib>  // For getenv()
 #include "lltooltip.h"
 #include "llhudmanager.h"
 #include "llfloatertools.h"
@@ -55,6 +57,7 @@
 #include "llfloaterreg.h"
 #include "llfloatercamera.h"
 #include "llmenugl.h"
+#include "llwindowsdl2.h"
 
 // Globals
 bool gCameraBtnZoom = true;
@@ -73,6 +76,8 @@ LLToolCamera::LLToolCamera()
     mAccumY(0),
     mMouseDownX(0),
     mMouseDownY(0),
+    mMouseDownWindowX(0),
+    mMouseDownWindowY(0),
     mOutsideSlopX(false),
     mOutsideSlopY(false),
     mValidClickPoint(false),
@@ -156,10 +161,42 @@ void LLToolCamera::pickCallback(const LLPickInfo& pick_info)
     }
     camera->mClickPickPending = false;
 
-    camera->mMouseDownX = pick_info.mMousePt.mX;
-    camera->mMouseDownY = pick_info.mMousePt.mY;
+    // Save both screen and window coordinates for proper restoration
+    S32 mouse_x, mouse_y;
+    LLUI::getInstance()->getMousePositionScreen(&mouse_x, &mouse_y);
+    camera->mMouseDownX = mouse_x;
+    camera->mMouseDownY = mouse_y;
+    
+    // Also save window coordinates for XWayland cursor restoration
+    LLCoordWindow window_pos;
+    if (gViewerWindow->getWindow() && gViewerWindow->getWindow()->getCursorPosition(&window_pos))
+    {
+        camera->mMouseDownWindowX = window_pos.mX;
+        camera->mMouseDownWindowY = window_pos.mY;
+    }
+    else
+    {
+        // Fallback to pick coordinates if cursor position unavailable
+        camera->mMouseDownWindowX = pick_info.mMousePt.mX;
+        camera->mMouseDownWindowY = pick_info.mMousePt.mY;
+    }
+    
+    
+    LL_INFOS("Camera") << "Saving initial mouse position - Screen: " 
+                       << camera->mMouseDownX << ", " << camera->mMouseDownY 
+                       << " Window: " << camera->mMouseDownWindowX << ", " << camera->mMouseDownWindowY
+                       << " (pick_info was: " << pick_info.mMousePt.mX 
+                       << ", " << pick_info.mMousePt.mY << ")" << LL_ENDL;
 
-    gViewerWindow->moveCursorToCenter();
+    // Simple XWayland fix: Hide cursor during camera operations to prevent warping issues
+    if (gViewerWindow->getWindow()->isRunningUnderXWayland())
+    {
+        gViewerWindow->hideCursor();
+    }
+    else
+    {
+        gViewerWindow->moveCursorToCenter();
+    }
 
     // Potentially recenter if click outside rectangle
     LLViewerObject* hit_obj = pick_info.getObject();
@@ -283,6 +320,12 @@ void LLToolCamera::releaseMouse()
         LLToolMgr::getInstance()->clearTransientTool();
     }
 
+    // Simple XWayland fix: Show cursor when camera operation ends
+    if (gViewerWindow->getWindow()->isRunningUnderXWayland())
+    {
+        gViewerWindow->showCursor();
+    }
+
     mMouseSteering = false;
     mValidClickPoint = false;
     mOutsideSlopX = false;
@@ -314,18 +357,15 @@ bool LLToolCamera::handleMouseUp(S32 x, S32 y, MASK mask)
                         LLUI::getInstance()->setMousePositionScreen(mouse_pos.mX, mouse_pos.mY);
                     }
                 }
-                else if (mMouseSteering)
-                {
-                    LLUI::getInstance()->setMousePositionScreen(mMouseDownX, mMouseDownY);
-                }
                 else
                 {
-                    gViewerWindow->moveCursorToCenter();
+                    // Restore cursor to original position after camera operation
+                    LLUI::getInstance()->setMousePositionScreen(mMouseDownX, mMouseDownY);
                 }
             }
             else
             {
-                // not a valid zoomable object
+                // not a valid zoomable object - restore cursor to original position
                 LLUI::getInstance()->setMousePositionScreen(mMouseDownX, mMouseDownY);
             }
         }
@@ -340,6 +380,8 @@ bool LLToolCamera::handleMouseUp(S32 x, S32 y, MASK mask)
 
     return true;
 }
+
+// XWayland detection removed - now handled at core level in llviewerwindow.cpp
 
 static bool right_hold_mouse_walk = false;//<FS:JL> Mouse movement by Singularity
 

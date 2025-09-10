@@ -71,9 +71,31 @@ public:
     void makeContextCurrent(void* context) override;
     void destroySharedContext(void* context) override;
     /*virtual*/ void toggleVSync(bool enable_vsync);
+    // Enhanced VSync reliability methods
+    bool verifyVSyncState(bool expected_state);
+    void forceVSyncRecovery();
+    bool isVSyncSupported();
+    int getCurrentSwapInterval();
+    
+    // Advanced Frame Pacing System
+    void initializeFramePacing();
+    void updateFramePacing();
+    void applyFramePacing();
+    bool shouldSkipFrame();
+    void recordFrameTime(F64 frame_time);
+    void adjustTargetFrameTime();
+    
+    // Multi-Monitor VSync Support
+    void initializeMultiMonitorVSync();
+    void detectMonitorConfiguration();
+    void updateMonitorRefreshRates();
+    void synchronizeMultiMonitorVSync();
+    S32 getCurrentMonitor();
+    F64 calculateOptimalSyncTarget();
     // </FS:Zi>
     /*virtual*/ bool setCursorPosition(LLCoordWindow position);
     /*virtual*/ bool getCursorPosition(LLCoordWindow *position);
+    /*virtual*/ bool isWrapMouse() const override { return true; }
     /*virtual*/ void showCursor();
     /*virtual*/ void hideCursor();
     /*virtual*/ void showCursorFromMouseMove();
@@ -137,6 +159,10 @@ public:
         /*virtual*/ void setTitle(const std::string& title);
 
     void enableIME(bool b);
+    
+    // XWayland compatibility
+    /*virtual*/ bool isRunningUnderXWayland() const { return mRunningUnderXWayland; }
+    
 
     static std::vector<std::string> getDynamicFallbackFontList();
 
@@ -209,6 +235,35 @@ protected:
     LLPreeditor* mPreeditor;
     bool mIMEEnabled;
 
+    // VSync reliability tracking
+    bool mVSyncEnabled;
+    int mCurrentSwapInterval;
+    int mLastVerifiedSwapInterval;
+    F64 mLastVSyncVerifyTime;
+    
+    // Advanced Frame Pacing System
+    bool mFramePacingEnabled;
+    F64 mTargetFrameTime;
+    F64 mLastFrameTime;
+    F64 mFrameTimeAccumulator;
+    F64 mAverageFrameTime;
+    F64 mFrameVariance;
+    U32 mFrameCount;
+    U32 mConsecutiveFastFrames;
+    U32 mConsecutiveSlowFrames;
+    F64 mLastPacingAdjustment;
+    bool mAdaptivePacingEnabled;
+    
+    // Multi-Monitor VSync Support
+    bool mMultiMonitorVSyncEnabled;
+    S32 mPrimaryMonitorIndex;
+    S32 mCurrentMonitorIndex;
+    std::vector<S32> mMonitorRefreshRates;
+    F64 mMultiMonitorSyncTarget;
+    bool mCrossMonitorSyncDetected;
+    F64 mMinFrameTime;
+    F64 mMaxFrameTime;
+
     std::string mWindowTitle;
     double      mOriginalAspectRatio;
     bool        mNeedsResize;       // Constructor figured out the window is too big, it needs a resize.
@@ -236,6 +291,24 @@ private:
     std::string mInputType;
 
     bool mUseLegacyCursors; // <FS:LO> Legacy cursor setting from main program
+    bool mRunningUnderXWayland;  // True if running under XWayland compatibility layer
+    
+    // XWayland cursor position tracking for ungrab operations
+    LLCoordWindow mSavedCursorPos;  // Cursor position before grab/ungrab
+    bool mInGrabOperation;          // True during pointer grab operations
+    bool mSkipNextWarpEvent;        // Skip spurious warp events from XWayland
+    F64 mLastUngrabTime;           // Time of last ungrab operation
+    F64 mGrabOperationStartTime;   // Time when grab operation started (for timeout)
+    LLCoordWindow mLastValidMousePos; // Last known valid mouse position
+    
+    // XWayland grab operation timeout (5 seconds)
+    static const F64 GRAB_TIMEOUT;
+    
+    // XWayland DPI and scaling support
+    F32 mXWaylandDPIScale;         // DPI scale factor for XWayland
+    S32 mDetectedDPI;              // Detected system DPI
+    bool mDPIScalingInitialized;   // Whether DPI scaling has been detected
+    
 
 public:
 #if LL_X11
@@ -247,6 +320,11 @@ public:
 private:
     void tryFindFullscreenSize( int &aWidth, int &aHeight );
     void initialiseX11Clipboard();
+    void initializeXWaylandDPIScaling();
+    
+    // XWayland state validation and recovery
+    bool validateGrabState();
+    void forceGrabReset();
 
     bool getSelectionText(Atom selection, LLWString& text);
     bool getSelectionText( Atom selection, Atom type, LLWString &text );

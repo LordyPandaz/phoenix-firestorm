@@ -129,3 +129,10 @@ firestorm.code-workspace
 .github/release.yaml
 
 checks.json
+
+# Prevent accidental commits of development files
+.serena/
+GPU_OPTIMIZATION_README.md
+problems.md
+xwayland_*.log
+autobuild.xml

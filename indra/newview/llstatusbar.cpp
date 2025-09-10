@@ -617,7 +617,20 @@ void LLStatusBar::refresh()
 
         mFPSUpdateTimer.reset();
         const auto fps = LLTrace::get_frame_recording().getPeriodMedianPerSec(LLStatViewer::FPS);
-        mFPSText->setText(llformat("%.1f", fps));
+        
+        // Add diagnostic info for VSync debugging (when FPS is unusually low)
+        std::string fps_text = llformat("%.1f", fps);
+        if (fps < 30.0f && gViewerWindow && gViewerWindow->getWindow())
+        {
+            int swap_interval = gViewerWindow->getWindow()->getCurrentSwapInterval();
+            if (swap_interval > 1)
+            {
+                // Show swap interval diagnostic when VSync might be corrupted
+                fps_text += llformat(" [SI:%d]", swap_interval);
+            }
+        }
+        
+        mFPSText->setText(fps_text);
 
         auto fps_color{ fps_uncapped_color };
         if (fsStatusBarShowFPSColors)

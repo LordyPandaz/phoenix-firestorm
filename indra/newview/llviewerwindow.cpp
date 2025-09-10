@@ -1611,7 +1611,21 @@ void LLViewerWindow::handleFocusLost(LLWindow *window)
     gFocusMgr.setAppHasFocus(false);
     //LLModalDialog::onAppFocusLost();
     LLToolMgr::getInstance()->onAppFocusLost();
-    gFocusMgr.setMouseCapture( NULL );
+    
+    // Protect mouselook mode under XWayland from spurious focus loss events
+    // Only release mouse capture and show cursor if we're not in mouselook
+    bool in_mouselook = gAgentCamera.cameraMouselook();
+    
+    if (!in_mouselook)
+    {
+        gFocusMgr.setMouseCapture( NULL );
+    }
+    else
+    {
+        // In mouselook mode, log the event but don't release mouse capture
+        // This prevents spurious XWayland focus events from breaking mouselook
+        LL_INFOS("XWayland") << "Focus lost while in mouselook - preserving mouse capture" << LL_ENDL;
+    }
 
     if (gMenuBarView)
     {
@@ -1619,9 +1633,13 @@ void LLViewerWindow::handleFocusLost(LLWindow *window)
         gMenuBarView->resetMenuTrigger();
     }
 
-    // restore mouse cursor
-    showCursor();
-    getWindow()->setMouseClipping(false);
+    // Only show cursor and disable mouse clipping if not in mouselook
+    if (!in_mouselook)
+    {
+        // restore mouse cursor
+        showCursor();
+        getWindow()->setMouseClipping(false);
+    }
 
     // If losing focus while keys are down, handle them as
     // an 'up' to correctly release states, then reset states
@@ -3749,7 +3767,36 @@ void LLViewerWindow::clearPopups()
 
 void LLViewerWindow::moveCursorToCenter()
 {
-    if (! gSavedSettings.getBOOL("DisableMouseWarp"))
+    bool mouse_warp = false;
+    LLCachedControl<S32> mouse_warp_mode(gSavedSettings, "MouseWarpMode", 0);
+
+    switch (mouse_warp_mode())
+    {
+    case 0:
+        // For Windows:
+        // Mouse usually uses 'delta' position since it isn't aware of own location, keep it centered.
+        // Touch screen reports absolute or virtual absolute position and warping a physical
+        // touch is pointless, so don't move it.
+        //
+        // For Linux/SDL:
+        // Use the window's capability to determine if mouse wrapping is appropriate
+        mouse_warp = mWindow && mWindow->isWrapMouse();
+        break;
+    case 1:
+        mouse_warp = true;
+        break;
+    default:
+        mouse_warp = false;
+        break;
+    }
+
+    // Legacy DisableMouseWarp setting still takes precedence
+    if (gSavedSettings.getBOOL("DisableMouseWarp"))
+    {
+        mouse_warp = false;
+    }
+
+    if (mouse_warp)
     {
         S32 x = getWorldViewWidthScaled() / 2;
         S32 y = getWorldViewHeightScaled() / 2;
