@@ -479,8 +479,17 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
                 camera_to_focus -= gAgentCamera.getFocusGlobal();
                 F32 dist = (F32) camera_to_focus.normVec();
 
-                // Fudge factor for pan
-                F32 meters_per_pixel = 3.f * dist / gViewerWindow->getWorldViewWidthScaled();
+                // Adjusted panning sensitivity to match mouselook feel
+                // Further reduced from 1.5 to 0.8 for much slower, more precise panning
+                F32 pan_sensitivity = 0.8f;
+                
+                // Apply additional reduction in relative mouse mode for consistency
+                if (gViewerWindow->getWindow() && gViewerWindow->getWindow()->isInRelativeMouseMode())
+                {
+                    pan_sensitivity *= 0.6f; // Further reduce for relative mode
+                }
+                
+                F32 meters_per_pixel = pan_sensitivity * dist / gViewerWindow->getWorldViewWidthScaled();
 
                 if (dx != 0)
                 {
