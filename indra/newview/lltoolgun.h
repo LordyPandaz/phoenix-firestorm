@@ -51,6 +51,10 @@ private:
 
     // <FS:Ansariel> Performance tweak
     LLUIImagePtr    mCrosshairp;
+    
+    // Movement smoothing for mouselook
+    F32 mSmoothedDeltaX;
+    F32 mSmoothedDeltaY;
 };
 
 #endif

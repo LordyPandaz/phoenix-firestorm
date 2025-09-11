@@ -123,6 +123,15 @@ bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
     // Ensure a mouseup
     setMouseCapture(true);
 
+    // Enable relative mouse mode for Alt+drag camera controls with window grab for desktop isolation
+    if (mask & (MASK_ALT | MASK_ORBIT | MASK_PAN) || gCameraBtnOrbit || gCameraBtnPan || gCameraBtnZoom)
+    {
+        SDL_SetRelativeMouseMode(SDL_TRUE);
+        SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_TRUE);
+        SDL_RaiseWindow(SDL_GetMouseFocus());
+        LL_DEBUGS("Mouse") << "Enabled relative mouse mode with window grab for camera controls" << LL_ENDL;
+    }
+
     // call the base class to propogate info to sim
     LLTool::handleMouseDown(x, y, mask);
 
@@ -145,7 +154,12 @@ bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
     mMouseUpY = y;
     mMouseUpMask = mask;
 
-    gViewerWindow->hideCursor();
+    // Only hide cursor manually if not using SDL relative mouse mode
+    // (SDL relative mode handles cursor hiding automatically)
+    if (!gViewerWindow->getWindow()->isInRelativeMouseMode())
+    {
+        gViewerWindow->hideCursor();
+    }
 
     gViewerWindow->pickAsync(x, y, mask, pickCallback, /*bool pick_transparent*/ false, /*bool pick_rigged*/ false, /*bool pick_unselectable*/ true);
 
@@ -188,15 +202,8 @@ void LLToolCamera::pickCallback(const LLPickInfo& pick_info)
                        << " (pick_info was: " << pick_info.mMousePt.mX 
                        << ", " << pick_info.mMousePt.mY << ")" << LL_ENDL;
 
-    // Simple XWayland fix: Hide cursor during camera operations to prevent warping issues
-    if (gViewerWindow->getWindow()->isRunningUnderXWayland())
-    {
-        gViewerWindow->hideCursor();
-    }
-    else
-    {
-        gViewerWindow->moveCursorToCenter();
-    }
+    // Hide cursor during camera operations (SDL relative mode will handle mouse capture)
+    gViewerWindow->hideCursor();
 
     // Potentially recenter if click outside rectangle
     LLViewerObject* hit_obj = pick_info.getObject();
@@ -370,6 +377,11 @@ bool LLToolCamera::handleMouseUp(S32 x, S32 y, MASK mask)
             }
         }
 
+        // Disable relative mouse mode and window grab for camera controls
+        SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_FALSE);
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        LL_DEBUGS("Mouse") << "Disabled relative mouse mode and window grab for camera controls" << LL_ENDL;
+
         // calls releaseMouse() internally
         setMouseCapture(false);
     }
@@ -396,6 +408,12 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
 
     S32 dx = gViewerWindow->getCurrentMouseDX();
     S32 dy = gViewerWindow->getCurrentMouseDY();
+
+    LL_DEBUGS("UserInput") << "LLToolCamera::handleHover: dx=" << dx << " dy=" << dy 
+                          << " mask=0x" << std::hex << mask << std::dec
+                          << " gCameraBtnZoom=" << gCameraBtnZoom 
+                          << " gCameraBtnOrbit=" << gCameraBtnOrbit 
+                          << " gCameraBtnPan=" << gCameraBtnPan << LL_ENDL;
 
     if (hasMouseCapture() && mValidClickPoint)
     {
@@ -430,7 +448,13 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
             // Orbit tool
             if (hasMouseCapture())
             {
-                const F32 RADIANS_PER_PIXEL = 360.f * DEG_TO_RAD / gViewerWindow->getWorldViewWidthScaled();
+                F32 RADIANS_PER_PIXEL = 360.f * DEG_TO_RAD / gViewerWindow->getWorldViewWidthScaled();
+                
+                // Increase sensitivity for relative mouse mode (XWayland)
+                if (gViewerWindow->getWindow() && gViewerWindow->getWindow()->isInRelativeMouseMode())
+                {
+                    RADIANS_PER_PIXEL *= 10.0f; // Increase sensitivity for relative mode
+                }
 
                 if (dx != 0)
                 {
@@ -441,8 +465,6 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
                 {
                     gAgentCamera.cameraOrbitOver( -dy * RADIANS_PER_PIXEL );
                 }
-
-                gViewerWindow->moveCursorToCenter();
             }
             LL_DEBUGS("UserInput") << "hover handled by LLToolFocus [active]" << LL_ENDL;
         }
@@ -469,21 +491,29 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
                 {
                     gAgentCamera.cameraPanUp( -dy * meters_per_pixel );
                 }
-
-                gViewerWindow->moveCursorToCenter();
             }
             LL_DEBUGS("UserInput") << "hover handled by LLToolPan" << LL_ENDL;
         }
         else if (gCameraBtnZoom)
         {
             // Zoom tool
+            LL_DEBUGS("UserInput") << "LLToolZoom: dx=" << dx << " dy=" << dy 
+                                  << " mOutsideSlopY=" << mOutsideSlopY 
+                                  << " mMouseSteering=" << mMouseSteering << LL_ENDL;
             if (hasMouseCapture())
             {
 
-                const F32 RADIANS_PER_PIXEL = 360.f * DEG_TO_RAD / gViewerWindow->getWorldViewWidthScaled();
+                F32 RADIANS_PER_PIXEL = 360.f * DEG_TO_RAD / gViewerWindow->getWorldViewWidthScaled();
+                
+                // Increase sensitivity for relative mouse mode (XWayland)
+                if (gViewerWindow->getWindow() && gViewerWindow->getWindow()->isInRelativeMouseMode())
+                {
+                    RADIANS_PER_PIXEL *= 10.0f; // Increase sensitivity for relative mode
+                }
 
                 if (dx != 0)
                 {
+                    LL_DEBUGS("UserInput") << "LLToolZoom: cameraOrbitAround dx=" << dx << LL_ENDL;
                     gAgentCamera.cameraOrbitAround( -dx * RADIANS_PER_PIXEL );
                 }
 
@@ -493,15 +523,27 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
                 {
                     if (mMouseSteering)
                     {
+                        LL_DEBUGS("UserInput") << "LLToolZoom: cameraOrbitOver dy=" << dy << LL_ENDL;
                         gAgentCamera.cameraOrbitOver( -dy * RADIANS_PER_PIXEL );
                     }
                     else
                     {
-                        gAgentCamera.cameraZoomIn((F32)pow( IN_FACTOR, dy ) );
+                        // Apply sensitivity multiplier for zoom in relative mode
+                        F32 zoom_sensitivity = 1.0f;
+                        if (gViewerWindow->getWindow() && gViewerWindow->getWindow()->isInRelativeMouseMode())
+                        {
+                            zoom_sensitivity = 3.0f; // Increase zoom sensitivity for relative mode
+                        }
+                        
+                        LL_DEBUGS("UserInput") << "LLToolZoom: cameraZoomIn dy=" << dy 
+                                              << " sensitivity=" << zoom_sensitivity << LL_ENDL;
+                        gAgentCamera.cameraZoomIn((F32)pow( IN_FACTOR, dy * zoom_sensitivity ) );
                     }
                 }
-
-                gViewerWindow->moveCursorToCenter();
+                else if (dy != 0)
+                {
+                    LL_DEBUGS("UserInput") << "LLToolZoom: dy=" << dy << " but mOutsideSlopY=" << mOutsideSlopY << LL_ENDL;
+                }
             }
 
             LL_DEBUGS("UserInput") << "hover handled by LLToolZoom" << LL_ENDL;
@@ -560,6 +602,11 @@ bool LLToolCamera::handleRightMouseUp(S32 x, S32 y, MASK mask)
 
 void LLToolCamera::onMouseCaptureLost()
 {
+    // Disable relative mouse mode and window grab when capture is lost
+    SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_FALSE);
+    SDL_SetRelativeMouseMode(SDL_FALSE);
+    LL_DEBUGS("Mouse") << "Disabled relative mouse mode and window grab on capture lost" << LL_ENDL;
+
     releaseMouse();
     // <FS:Ansariel> Mouse movement by Singularity
     handleRightMouseUp(0,0,0);

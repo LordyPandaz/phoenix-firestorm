@@ -101,6 +101,12 @@ public:
     /*virtual*/ void showCursorFromMouseMove();
     /*virtual*/ void hideCursorUntilMouseMove();
     /*virtual*/ bool isCursorHidden();
+    /*virtual*/ bool isInRelativeMouseMode() override { return SDL_GetRelativeMouseMode(); }
+    // Get relative mouse deltas for camera control (no clearing)
+    S32 getRelativeDeltaX() const { return mRelativeDeltaX; }
+    S32 getRelativeDeltaY() const { return mRelativeDeltaY; }
+    void clearRelativeDeltas() { mRelativeDeltaX = 0; mRelativeDeltaY = 0; }
+    
     /*virtual*/ void updateCursor();
     /*virtual*/ void captureMouse();
     /*virtual*/ void releaseMouse();
@@ -297,6 +303,9 @@ private:
     LLCoordWindow mSavedCursorPos;  // Cursor position before grab/ungrab
     bool mInGrabOperation;          // True during pointer grab operations
     bool mSkipNextWarpEvent;        // Skip spurious warp events from XWayland
+    
+    S32 mRelativeDeltaX;           // Last relative X motion from SDL
+    S32 mRelativeDeltaY;           // Last relative Y motion from SDL
     F64 mLastUngrabTime;           // Time of last ungrab operation
     F64 mGrabOperationStartTime;   // Time when grab operation started (for timeout)
     LLCoordWindow mLastValidMousePos; // Last known valid mouse position

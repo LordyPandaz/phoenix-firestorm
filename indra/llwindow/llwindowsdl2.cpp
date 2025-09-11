@@ -45,6 +45,7 @@
 #include "llcontrol.h"
 extern LLControlGroup gSavedSettings;
 
+
 #ifdef LL_GLIB
 #include <glib.h>
 #endif
@@ -401,6 +402,8 @@ LLWindowSDL::LLWindowSDL(LLWindowCallbacks* callbacks,
       mLastUngrabTime(0.0),          // No previous ungrab operation
       mGrabOperationStartTime(0.0),  // No grab operation started
       mLastValidMousePos(0, 0),      // No last valid mouse position
+      mRelativeDeltaX(0),            // No relative motion initially
+      mRelativeDeltaY(0),            // No relative motion initially
       mXWaylandDPIScale(1.0f),       // Default DPI scale
       mDetectedDPI(96),              // Default DPI
       mDPIScalingInitialized(false)  // DPI not yet initialized
@@ -717,6 +720,14 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
         setupFailure("sdl_init() failure,  window creation error", "error", OSMB_OK);
         return false;
     }
+    
+    // Enable Wayland mouse warp emulation for compatibility with older games
+    SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_EMULATE_MOUSE_WARP, "1");
+    LL_INFOS("SDL") << "Enabled Wayland mouse warp emulation hint" << LL_ENDL;
+    
+    // Disable warp motion events to prevent interference with relative mouse mode
+    SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_WARP_MOTION, "0");
+    LL_INFOS("SDL") << "Disabled relative warp motion events for better XWayland support" << LL_ENDL;
 
     SDL_version c_sdl_version;
     SDL_VERSION(&c_sdl_version);
@@ -936,6 +947,13 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
             {
                 LL_INFOS("Window") << "Running on native X11" << LL_ENDL;
                 mRunningUnderXWayland = false;
+            }
+            
+            // Use warp-to-center approach for XWayland camera controls
+            if (mRunningUnderXWayland)
+            {
+                // Use warp-to-center approach for better compatibility
+                LL_INFOS("XWayland") << "Using warp-to-center approach for camera controls" << LL_ENDL;
             }
         }
         else
@@ -1432,10 +1450,23 @@ bool LLWindowSDL::isCursorHidden()
 
 
 
+
 // Constrains the mouse to the window.
 void LLWindowSDL::setMouseClipping( bool b )
 {
-    //SDL_WM_GrabInput(b ? SDL_GRAB_ON : SDL_GRAB_OFF);
+    if (b)
+    {
+        // Use window grab for proper desktop isolation, especially important for GNOME hot corners
+        SDL_SetWindowGrab(mWindow, SDL_TRUE);
+        SDL_ShowCursor(SDL_DISABLE);
+        LL_DEBUGS("Mouse") << "Mouse clipping enabled with window grab (relative mode: " << (SDL_GetRelativeMouseMode() ? "yes" : "no") << ")" << LL_ENDL;
+    }
+    else
+    {
+        SDL_SetWindowGrab(mWindow, SDL_FALSE);
+        SDL_ShowCursor(SDL_ENABLE);
+        LL_DEBUGS("Mouse") << "Mouse clipping disabled" << LL_ENDL;
+    }
 }
 
 // virtual
@@ -1466,11 +1497,27 @@ bool LLWindowSDL::setCursorPosition(const LLCoordWindow position)
     {
         return false;
     }
+    
+    // Skip cursor warping when in relative mouse mode (cursor is hidden anyway)
+    if (SDL_GetRelativeMouseMode())
+    {
+        return true;  // Pretend success - relative mode handles motion differently
+    }
 
     //LL_INFOS() << "setCursorPosition(" << screen_pos.mX << ", " << screen_pos.mY << ")" << LL_ENDL;
 
-    // do the actual forced cursor move.
-    SDL_WarpMouseInWindow(mWindow, screen_pos.mX, screen_pos.mY);
+    // For XWayland when not in relative mouse mode, use hide-warp-show sequence for better compatibility
+    if (mRunningUnderXWayland && !SDL_GetRelativeMouseMode())
+    {
+        SDL_ShowCursor(SDL_DISABLE);
+        SDL_WarpMouseInWindow(mWindow, screen_pos.mX, screen_pos.mY);
+        SDL_ShowCursor(SDL_ENABLE);
+    }
+    else
+    {
+        // Standard warp for native X11 or when relative mode is not active
+        SDL_WarpMouseInWindow(mWindow, screen_pos.mX, screen_pos.mY);
+    }
 
     //LL_INFOS() << llformat("llcw %d,%d -> scr %d,%d", position.mX, position.mY, screen_pos.mX, screen_pos.mY) << LL_ENDL;
 
@@ -1970,36 +2017,48 @@ bool LLWindowSDL::SDLReallyCaptureInput(bool capture)
                     }
                     else
                     {
-                        // Save cursor position before grabbing for XWayland ungrab restoration
-                        // Only save position if we're not already in a grab operation
-                        if (mRunningUnderXWayland && !mInGrabOperation)
-                        {
-                            getCursorPosition(&mSavedCursorPos);
-                            mGrabOperationStartTime = LLFrameTimer::getTotalTime();
-                            LL_INFOS("XWayland") << "Saving cursor position before grab: " 
-                                                 << mSavedCursorPos.mX << ", " << mSavedCursorPos.mY << LL_ENDL;
-                        }
-
-                        // Use modern SDL_CaptureMouse instead of raw X11 grabs
-                        int result = SDL_CaptureMouse(SDL_TRUE);
-                        if (0 == result)
+                        // Standard grabbing for XWayland
+                        if (mRunningUnderXWayland)
                         {
                             newGrab = true;
-                            if (mRunningUnderXWayland)
-                                mInGrabOperation = true;
+                            LL_INFOS("XWayland") << "Enabled grabbing for input capture" << LL_ENDL;
                         }
-                        else
+                        
+                        // Use standard capture approach
                         {
-                            newGrab = false;
-                            if (mRunningUnderXWayland)
-                                mInGrabOperation = false;
-                            LL_WARNS("Mouse") << "SDL_CaptureMouse failed: " << SDL_GetError() << LL_ENDL;
+                            // Save cursor position before grabbing for XWayland ungrab restoration
+                            // Only save position if we're not already in a grab operation
+                            if (mRunningUnderXWayland && !mInGrabOperation)
+                            {
+                                getCursorPosition(&mSavedCursorPos);
+                                mGrabOperationStartTime = LLFrameTimer::getTotalTime();
+                                LL_INFOS("XWayland") << "Saving cursor position before grab: " 
+                                                     << mSavedCursorPos.mX << ", " << mSavedCursorPos.mY << LL_ENDL;
+                            }
+
+                            // Use modern SDL_CaptureMouse instead of raw X11 grabs
+                            int result = SDL_CaptureMouse(SDL_TRUE);
+                            if (0 == result)
+                            {
+                                newGrab = true;
+                                if (mRunningUnderXWayland)
+                                    mInGrabOperation = true;
+                            }
+                            else
+                            {
+                                newGrab = false;
+                                if (mRunningUnderXWayland)
+                                    mInGrabOperation = false;
+                                LL_WARNS("Mouse") << "SDL_CaptureMouse failed: " << SDL_GetError() << LL_ENDL;
+                            }
                         }
                     }
                 }
                 else
                 {
                     newGrab = false;
+                    
+                    // Clean up grab state
                     SDL_CaptureMouse(SDL_FALSE);
 
                     // XWayland grab state cleanup and cursor restoration after ungrab
@@ -2314,19 +2373,35 @@ void LLWindowSDL::gatherInput()
 
             case SDL_MOUSEMOTION:
             {
-                // Handle skip warp event flag for XWayland
-                if (mRunningUnderXWayland && mSkipNextWarpEvent)
+                LLCoordWindow winCoord;
+                
+                // Handle relative mouse mode for camera controls
+                if (SDL_GetRelativeMouseMode())
                 {
-                    mSkipNextWarpEvent = false;
-                    LL_DEBUGS("XWayland") << "Skipping warp event" << LL_ENDL;
-                    break; // Skip this motion event
+                    // Accumulate relative motion across multiple events per frame
+                    // This prevents jittery movement by preserving all mouse movements
+                    mRelativeDeltaX += event.motion.xrel;
+                    mRelativeDeltaY += -event.motion.yrel;  // Invert Y axis for correct mouselook
+                    
+                    // Get window center for coordinates
+                    int w, h;
+                    SDL_GetWindowSize(mWindow, &w, &h);
+                    winCoord.mX = w / 2;
+                    winCoord.mY = h / 2;
+                    
+                    LL_DEBUGS("Mouse") << "Relative mode: xrel=" << event.motion.xrel 
+                                      << " yrel=" << event.motion.yrel 
+                                      << " delta=(" << mRelativeDeltaX << "," << mRelativeDeltaY << ")" << LL_ENDL;
+                }
+                else
+                {
+                    // Standard absolute coordinate handling
+                    winCoord.mX = event.motion.x;
+                    winCoord.mY = event.motion.y;
                 }
                 
-                // Use correct coordinate source (motion.x/y not button.x/y)
-                LLCoordWindow winCoord(event.motion.x, event.motion.y);
-                
-                // Validate coordinates for multi-monitor setups
-                if (mRunningUnderXWayland)
+                // Validate coordinates for multi-monitor setups (skip when in relative mode)
+                if (mRunningUnderXWayland && !SDL_GetRelativeMouseMode())
                 {
                     // Get display bounds
                     SDL_Rect bounds;
@@ -2691,6 +2766,13 @@ void LLWindowSDL::gatherInput()
                     // issues when focus is regained. Instead, we just log that focus was lost
                     // and let the focus regain handler restore proper state.
                     
+                    // Disable relative mouse mode on focus loss
+                    if (SDL_GetRelativeMouseMode())
+                    {
+                        SDL_SetRelativeMouseMode(SDL_FALSE);
+                        LL_INFOS("Window") << "Disabled relative mouse mode on focus loss" << LL_ENDL;
+                    }
+                    
                     // XWayland improved focus handling
                     if (mRunningUnderXWayland)
                     {
@@ -2717,6 +2799,13 @@ void LLWindowSDL::gatherInput()
                         if (legitimate_focus_loss)
                         {
                             LL_INFOS("XWayland") << "Legitimate focus lost - resetting grab state" << LL_ENDL;
+                            
+                            // Clean up relative mouse mode if active
+                            if (SDL_GetRelativeMouseMode())
+                            {
+                                SDL_SetRelativeMouseMode(SDL_FALSE);
+                                LL_INFOS("XWayland") << "Disabled relative mouse mode on focus loss" << LL_ENDL;
+                            }
                             
                             // Force ungrab if we have any active grab operations
                             if (mInGrabOperation || mGrabbyKeyFlags != 0)

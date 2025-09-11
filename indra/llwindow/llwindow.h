@@ -100,6 +100,7 @@ public:
     virtual bool isCursorHidden() = 0;
     virtual void showCursorFromMouseMove() = 0;
     virtual void hideCursorUntilMouseMove() = 0;
+    virtual bool isInRelativeMouseMode() { return false; } // Default implementation for non-SDL windows
 
     // Provide a way to set the Viewer window title after the
     // windows has been created. The initial use case for this

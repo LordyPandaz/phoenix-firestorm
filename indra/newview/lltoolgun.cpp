@@ -48,10 +48,13 @@
 #include "lluiimage.h"
 // Linden library includes
 #include "llwindow.h"           // setMouseClipping()
+#include "llwindowsdl2.h"       // setCameraControlActive()
 
 LLToolGun::LLToolGun( LLToolComposite* composite )
 :   LLTool( std::string("gun"), composite ),
-        mIsSelected(false)
+        mIsSelected(false),
+        mSmoothedDeltaX(0.0f),
+        mSmoothedDeltaY(0.0f)
 {
     // <FS:Ansariel> Performance tweak
     mCrosshairp = LLUI::getUIImage("crosshairs.tga");
@@ -66,7 +69,22 @@ void LLToolGun::handleSelect()
         gViewerWindow->hideCursor();
         gViewerWindow->moveCursorToCenter();
         gViewerWindow->getWindow()->setMouseClipping(true);
+        
+        // Enable relative mouse mode for mouselook with window grab for desktop isolation
+        LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow());
+        if (sdl_window)
+        {
+            SDL_SetRelativeMouseMode(SDL_TRUE);
+            SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_TRUE);
+            SDL_RaiseWindow(SDL_GetMouseFocus());
+            LL_DEBUGS("Mouse") << "Enabled relative mouse mode with window grab for mouselook" << LL_ENDL;
+        }
+        
         mIsSelected = true;
+        
+        // Reset smoothing values to prevent initial jump
+        mSmoothedDeltaX = 0.0f;
+        mSmoothedDeltaY = 0.0f;
 // [RLVa:KB] - Checked: 2014-02-24 (RLVa-1.4.10)
     }
 // [/RLVa:KB]
@@ -76,6 +94,16 @@ void LLToolGun::handleDeselect()
 {
     gViewerWindow->moveCursorToCenter();
     gViewerWindow->showCursor();
+    
+    // Disable relative mouse mode and window grab for mouselook
+    LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow());
+    if (sdl_window)
+    {
+        SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_FALSE);
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        LL_DEBUGS("Mouse") << "Disabled relative mouse mode and window grab for mouselook" << LL_ENDL;
+    }
+    
     gViewerWindow->getWindow()->setMouseClipping(false);
     mIsSelected = false;
 }
@@ -101,28 +129,58 @@ bool LLToolGun::handleHover(S32 x, S32 y, MASK mask)
         // </FS:Ansariel> Use faster LLCachedControl
         mouse_sensitivity = clamp_rescale(mouse_sensitivity, 0.f, 15.f, 0.5f, 2.75f) * NOMINAL_MOUSE_SENSITIVITY;
 
+        // Increase sensitivity for relative mouse mode (XWayland)
+        if (gViewerWindow->getWindow() && gViewerWindow->getWindow()->isInRelativeMouseMode())
+        {
+            mouse_sensitivity *= 3.5f; // Optimized for smooth control with movement smoothing
+        }
+
         // ...move the view with the mouse
 
         // get mouse movement delta
         S32 dx = -gViewerWindow->getCurrentMouseDX();
-        S32 dy = -gViewerWindow->getCurrentMouseDY();
+        S32 dy = gViewerWindow->getCurrentMouseDY();
+
+        LL_DEBUGS("MouseLook") << "Raw mouse deltas: dx=" << dx << ", dy=" << dy << LL_ENDL;
 
         if (dx != 0 || dy != 0)
         {
             // ...actually moved off center
+            // Clamp deltas to prevent jumps from accumulated values
+            const S32 MAX_MOUSE_DELTA = 300; // Increased for smoother fast movements
+            S32 original_dx = dx, original_dy = dy;
+            dx = llclamp(dx, -MAX_MOUSE_DELTA, MAX_MOUSE_DELTA);
+            dy = llclamp(dy, -MAX_MOUSE_DELTA, MAX_MOUSE_DELTA);
+            
+            if (dx != original_dx || dy != original_dy)
+            {
+                LL_WARNS("MouseLook") << "Mouse delta clamped from (" << original_dx << "," << original_dy 
+                                     << ") to (" << dx << "," << dy << ")" << LL_ENDL;
+            }
+            
+            // Apply exponential moving average smoothing for jitter reduction
+            const F32 SMOOTHING_ALPHA = 0.35f; // Balance between smoothness and responsiveness
+            mSmoothedDeltaX = SMOOTHING_ALPHA * (F32)dx + (1.0f - SMOOTHING_ALPHA) * mSmoothedDeltaX;
+            mSmoothedDeltaY = SMOOTHING_ALPHA * (F32)dy + (1.0f - SMOOTHING_ALPHA) * mSmoothedDeltaY;
+            
             // <FS:Ansariel> Use faster LLCachedControl
             //if (gSavedSettings.getBOOL("InvertMouse"))
             static LLCachedControl<bool> invertMouse(gSavedSettings, "InvertMouse");
-            if (invertMouse)
-            {
-                gAgent.pitch(mouse_sensitivity * -dy);
-            }
-            else
-            {
-                gAgent.pitch(mouse_sensitivity * dy);
-            }
+            F32 pitch_amount = mouse_sensitivity * (invertMouse ? mSmoothedDeltaY : -mSmoothedDeltaY);
+            F32 rotate_amount = mouse_sensitivity * mSmoothedDeltaX;
+            
+            LL_DEBUGS("MouseLook") << "Raw deltas: (" << dx << "," << dy << ")"
+                                  << ", Smoothed: (" << mSmoothedDeltaX << "," << mSmoothedDeltaY << ")"
+                                  << ", sensitivity: " << mouse_sensitivity 
+                                  << ", pitch_amount: " << pitch_amount 
+                                  << ", rotate_amount: " << rotate_amount << LL_ENDL;
+            
+            gAgent.pitch(pitch_amount);
             LLVector3 skyward = gAgent.getReferenceUpVector();
-            gAgent.rotate(mouse_sensitivity * dx, skyward.mV[VX], skyward.mV[VY], skyward.mV[VZ]);
+            gAgent.rotate(rotate_amount, skyward.mV[VX], skyward.mV[VY], skyward.mV[VZ]);
+            
+            LL_DEBUGS("MouseLook") << "Agent pitch applied: " << pitch_amount 
+                                  << ", rotate applied: " << rotate_amount << LL_ENDL;
 
             // <FS:Ansariel> Use faster LLCachedControl
             //if (gSavedSettings.getBOOL("MouseSun"))

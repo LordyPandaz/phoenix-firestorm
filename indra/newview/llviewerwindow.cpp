@@ -232,6 +232,10 @@
 #include "llwindowwin32.h" // For AltGr handling
 #endif
 
+#if LL_SDL
+#include "llwindowsdl2.h" // For relative mouse mode access
+#endif
+
 #include "utilitybar.h"     // <FS:Zi> Support for the classic V1 style buttons in some skins
 #include "llnetmap.h"
 #include "lggcontactsets.h"
@@ -3801,12 +3805,25 @@ void LLViewerWindow::moveCursorToCenter()
         S32 x = getWorldViewWidthScaled() / 2;
         S32 y = getWorldViewHeightScaled() / 2;
 
-        LLUI::getInstance()->setMousePositionScreen(x, y);
+        // In relative mouse mode, don't actually move cursor (SDL handles it)
+        // but still reset our tracking variables
+        if (mWindow && mWindow->isInRelativeMouseMode())
+        {
+            // For relative mode, just reset deltas - cursor stays hidden at center
+            mCurrentMousePoint.set(x, y);
+            mLastMousePoint.set(x, y);
+            mCurrentMouseDelta.set(0, 0);
+        }
+        else
+        {
+            // Normal mode: actually move cursor to center
+            LLUI::getInstance()->setMousePositionScreen(x, y);
 
-        //on a forced move, all deltas get zeroed out to prevent jumping
-        mCurrentMousePoint.set(x,y);
-        mLastMousePoint.set(x,y);
-        mCurrentMouseDelta.set(0,0);
+            //on a forced move, all deltas get zeroed out to prevent jumping
+            mCurrentMousePoint.set(x,y);
+            mLastMousePoint.set(x,y);
+            mCurrentMouseDelta.set(0,0);
+        }
     }
 }
 
@@ -4364,8 +4381,33 @@ void LLViewerWindow::updateMouseDelta()
     S32 dx = delta.mX;
     S32 dy = delta.mY;
 #else
-    S32 dx = lltrunc((F32) (mCurrentMousePoint.mX - mLastMousePoint.mX) * LLUI::getScaleFactor().mV[VX]);
-    S32 dy = lltrunc((F32) (mCurrentMousePoint.mY - mLastMousePoint.mY) * LLUI::getScaleFactor().mV[VY]);
+    S32 dx, dy;
+    
+    // Use SDL relative deltas when in relative mouse mode for more accurate camera control
+    if (mWindow && mWindow->isInRelativeMouseMode())
+    {
+        // Get the relative deltas directly from SDL - this is the actual mouse movement
+        // Cast to LLWindowSDL to access the relative delta methods
+        LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(mWindow);
+        if (sdl_window)
+        {
+            dx = sdl_window->getRelativeDeltaX();
+            dy = sdl_window->getRelativeDeltaY();
+            // Clear the deltas after reading to prevent accumulation
+            sdl_window->clearRelativeDeltas();
+        }
+        else
+        {
+            // Fallback if cast fails
+            dx = dy = 0;
+        }
+    }
+    else
+    {
+        // Standard delta calculation from cursor position differences
+        dx = lltrunc((F32) (mCurrentMousePoint.mX - mLastMousePoint.mX) * LLUI::getScaleFactor().mV[VX]);
+        dy = lltrunc((F32) (mCurrentMousePoint.mY - mLastMousePoint.mY) * LLUI::getScaleFactor().mV[VY]);
+    }
 #endif
 
     //RN: fix for asynchronous notification of mouse leaving window not working
