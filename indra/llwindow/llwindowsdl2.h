@@ -107,6 +107,11 @@ public:
     S32 getRelativeDeltaY() const { return mRelativeDeltaY; }
     void clearRelativeDeltas() { mRelativeDeltaX = 0; mRelativeDeltaY = 0; }
     
+    // Cursor position management for relative mouse mode
+    void saveCursorPositionForRelativeMode();
+    void restoreCursorPositionFromRelativeMode();
+    void setRelativeModeState(bool active);
+    
     /*virtual*/ void updateCursor();
     /*virtual*/ void captureMouse();
     /*virtual*/ void releaseMouse();
@@ -155,6 +160,9 @@ public:
 
     /*virtual*/ void *getPlatformWindow();
     /*virtual*/ void bringToFront();
+    
+    // Get SDL window for direct SDL operations
+    SDL_Window* getSDLWindow() { return mWindow; }
 
     /*virtual*/ void allowLanguageTextInput(LLPreeditor* preeditor, bool b);
     /*virtual*/ void setLanguageTextInput(const LLCoordGL& pos);
@@ -168,6 +176,9 @@ public:
     
     // XWayland compatibility
     /*virtual*/ bool isRunningUnderXWayland() const { return mRunningUnderXWayland; }
+    
+    // Testing methods for coordinate debugging
+    void testCoordinateCompensation(int mode); // 0=disabled, 1=normal, 2=inverted, 3=double
     
 
     static std::vector<std::string> getDynamicFallbackFontList();
@@ -227,6 +238,11 @@ protected:
     void fixWindowSize(void);
     U32 SDLCheckGrabbyKeys(U32 keysym, bool gain);
     bool SDLReallyCaptureInput(bool capture);
+    void updateDPIScaling(); // Calculate and update DPI scale factors
+    void detectXWaylandScaling(); // Detect and configure XWayland fractional scaling compensation
+    void logCoordinateDebugInfo(const char* event_name, float original_x, float original_y, float compensated_x, float compensated_y); // Debug coordinate transformations
+    void logDetailedCoordinateFlow(const char* stage, float x, float y, const char* description); // Enhanced coordinate flow debugging
+    void setXWaylandCompensationEnabled(bool enabled); // Runtime toggle for XWayland compensation testing
 
     //
     // Platform specific variables
@@ -280,6 +296,19 @@ protected:
 
     int     mSDLFlags;
 
+    // DPI scale tracking for high DPI displays
+    float   mDPIScaleX;             // Horizontal DPI scale factor
+    float   mDPIScaleY;             // Vertical DPI scale factor
+    int     mDrawableWidth;         // Actual drawable width in pixels
+    int     mDrawableHeight;        // Actual drawable height in pixels
+
+    // XWayland fractional scaling compensation
+    bool    mXWaylandFractionalScaling; // True if XWayland with fractional scaling detected
+    float   mWaylandScaleFactor;        // GNOME/Wayland scale factor (e.g., 1.75 for 175%)
+    float   mCoordinateCompensationX;   // X coordinate compensation factor
+    float   mCoordinateCompensationY;   // Y coordinate compensation factor
+    bool    mXWaylandCompensationEnabled; // Runtime toggle for testing compensation strategies
+
     int             mHaveInputFocus; /* 0=no, 1=yes, else unknown */
     int             mIsMinimized; /* 0=no, 1=yes, else unknown */
 
@@ -310,6 +339,11 @@ private:
     F64 mGrabOperationStartTime;   // Time when grab operation started (for timeout)
     LLCoordWindow mLastValidMousePos; // Last known valid mouse position
     
+    // Relative mouse mode state management
+    bool mRelativeModeActive;         // True when relative mode is active
+    LLCoordWindow mPreRelativeModePos; // Cursor position saved before entering relative mode
+    bool mRestoreCursorOnModeChange;   // Whether to restore cursor position when exiting relative mode
+    
     // XWayland grab operation timeout (5 seconds)
     static const F64 GRAB_TIMEOUT;
     
@@ -317,6 +351,9 @@ private:
     F32 mXWaylandDPIScale;         // DPI scale factor for XWayland
     S32 mDetectedDPI;              // Detected system DPI
     bool mDPIScalingInitialized;   // Whether DPI scaling has been detected
+    
+    // XWayland cursor management for hide-warp-show sequence
+    bool mXWaylandTempCursorHidden; // True when cursor is temporarily hidden for XWayland warp
     
 
 public:

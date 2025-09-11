@@ -41,6 +41,13 @@
 #include "llfindlocale.h"
 #include "llframetimer.h"
 
+// For XWayland fractional scaling detection
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <exception>
+#include <algorithm>
+
 // if there is a better methood to get at the settings from llwindow/ let me know! -Zi
 #include "llcontrol.h"
 extern LLControlGroup gSavedSettings;
@@ -404,9 +411,21 @@ LLWindowSDL::LLWindowSDL(LLWindowCallbacks* callbacks,
       mLastValidMousePos(0, 0),      // No last valid mouse position
       mRelativeDeltaX(0),            // No relative motion initially
       mRelativeDeltaY(0),            // No relative motion initially
+      mRelativeModeActive(false),    // Relative mode not active initially
+      mPreRelativeModePos(0, 0),     // No saved position initially
+      mRestoreCursorOnModeChange(true), // Enable cursor restoration by default
       mXWaylandDPIScale(1.0f),       // Default DPI scale
       mDetectedDPI(96),              // Default DPI
-      mDPIScalingInitialized(false)  // DPI not yet initialized
+      mDPIScalingInitialized(false), // DPI not yet initialized
+      mXWaylandTempCursorHidden(false), // No temporary cursor hide initially
+      mDPIScaleX(1.0f),              // Default DPI scale X
+      mDPIScaleY(1.0f),              // Default DPI scale Y
+      mDrawableWidth(0),             // No drawable size initially
+      mDrawableHeight(0),            // No drawable size initially
+      mXWaylandFractionalScaling(false), // XWayland fractional scaling not detected initially
+      mWaylandScaleFactor(1.0f),     // Default Wayland scale factor
+      mCoordinateCompensationX(1.0f), // Default X coordinate compensation
+      mCoordinateCompensationY(1.0f)  // Default Y coordinate compensation
 {
     // Initialize the keyboard
     gKeyboard = new LLKeyboardSDL();
@@ -749,7 +768,7 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
 
     mFullscreen = fullscreen;
 
-    int sdlflags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+    int sdlflags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
 
     if( mFullscreen )
     {
@@ -813,6 +832,12 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
         toggleVSync(enable_vsync);
 
         mSurface = SDL_GetWindowSurface( mWindow );
+        
+        // Calculate DPI scaling factors
+        updateDPIScaling();
+        
+        // Detect XWayland fractional scaling and setup coordinate compensation
+        detectXWaylandScaling();
     }
 
 
@@ -1317,22 +1342,33 @@ bool LLWindowSDL::getPosition(LLCoordScreen *position)
 
 bool LLWindowSDL::getSize(LLCoordScreen *size)
 {
-    if (mSurface)
+    if (mWindow && size)
     {
-        size->mX = mSurface->w;
-        size->mY = mSurface->h;
-        return (true);
+        // For screen coordinates, use actual drawable size (physical pixels)
+        if (mDrawableWidth > 0 && mDrawableHeight > 0)
+        {
+            size->mX = mDrawableWidth;
+            size->mY = mDrawableHeight;
+        }
+        else
+        {
+            // Fallback if DPI scaling not initialized
+            SDL_GL_GetDrawableSize(mWindow, &size->mX, &size->mY);
+        }
+        return true;
     }
 
-    return (false);
+    return false;
 }
 
 bool LLWindowSDL::getSize(LLCoordWindow *size)
 {
-    if (mSurface)
+    if (mWindow)
     {
-        size->mX = mSurface->w;
-        size->mY = mSurface->h;
+        int window_w, window_h;
+        SDL_GetWindowSize(mWindow, &window_w, &window_h);
+        size->mX = window_w;
+        size->mY = window_h;
         return (true);
     }
 
@@ -1491,32 +1527,56 @@ void LLWindowSDL::setMinSize(U32 min_width, U32 min_height, bool enforce_immedia
 bool LLWindowSDL::setCursorPosition(const LLCoordWindow position)
 {
     bool result = true;
-    LLCoordScreen screen_pos;
-
-    if (!convertCoords(position, &screen_pos))
-    {
-        return false;
-    }
     
     // Skip cursor warping when in relative mouse mode (cursor is hidden anyway)
-    if (SDL_GetRelativeMouseMode())
+    if (SDL_GetRelativeMouseMode() || mRelativeModeActive)
     {
         return true;  // Pretend success - relative mode handles motion differently
     }
 
-    //LL_INFOS() << "setCursorPosition(" << screen_pos.mX << ", " << screen_pos.mY << ")" << LL_ENDL;
+    // SDL_WarpMouseInWindow expects window coordinates, not screen coordinates
+    // Apply DPI scaling to convert logical coordinates to physical window coordinates
+    S32 scaled_x = (S32)(position.mX * mDPIScaleX);
+    S32 scaled_y = (S32)(position.mY * mDPIScaleY);
 
-    // For XWayland when not in relative mouse mode, use hide-warp-show sequence for better compatibility
-    if (mRunningUnderXWayland && !SDL_GetRelativeMouseMode())
+    LL_DEBUGS("DPI") << "setCursorPosition logical: " << position.mX << ", " << position.mY 
+                     << " -> scaled: " << scaled_x << ", " << scaled_y 
+                     << " (scale: " << mDPIScaleX << "x" << mDPIScaleY << ")" << LL_ENDL;
+
+    // XWayland requires hide-warp-show sequence for proper mouse warping
+    // This is the critical fix that Blender also had to implement
+    if (mRunningUnderXWayland)
     {
-        SDL_ShowCursor(SDL_DISABLE);
-        SDL_WarpMouseInWindow(mWindow, screen_pos.mX, screen_pos.mY);
-        SDL_ShowCursor(SDL_ENABLE);
+        // Save current cursor visibility state - check both permanent and temporary states
+        bool cursor_was_visible = !mCursorHidden && !mXWaylandTempCursorHidden;
+        
+        // XWayland workaround: hide cursor before warping
+        if (cursor_was_visible)
+        {
+            mXWaylandTempCursorHidden = true;
+            SDL_ShowCursor(SDL_DISABLE);
+        }
+        
+        SDL_FlushEvent(SDL_MOUSEMOTION);
+        SDL_WarpMouseInWindow(mWindow, scaled_x, scaled_y);
+        SDL_FlushEvent(SDL_MOUSEMOTION);
+        
+        // Restore cursor visibility if it was visible before
+        if (cursor_was_visible)
+        {
+            SDL_ShowCursor(SDL_ENABLE);
+            mXWaylandTempCursorHidden = false;
+        }
+        
+        LL_DEBUGS("XWayland") << "Used hide-warp-show sequence for cursor position: " 
+                             << scaled_x << ", " << scaled_y << LL_ENDL;
     }
     else
     {
-        // Standard warp for native X11 or when relative mode is not active
-        SDL_WarpMouseInWindow(mWindow, screen_pos.mX, screen_pos.mY);
+        // Standard warping for native Wayland/X11
+        SDL_FlushEvent(SDL_MOUSEMOTION);
+        SDL_WarpMouseInWindow(mWindow, scaled_x, scaled_y);
+        SDL_FlushEvent(SDL_MOUSEMOTION);
     }
 
     //LL_INFOS() << llformat("llcw %d,%d -> scr %d,%d", position.mX, position.mY, screen_pos.mX, screen_pos.mY) << LL_ENDL;
@@ -1526,19 +1586,105 @@ bool LLWindowSDL::setCursorPosition(const LLCoordWindow position)
 
 bool LLWindowSDL::getCursorPosition(LLCoordWindow *position)
 {
-    //Point cursor_point;
-    LLCoordScreen screen_pos;
+    if (!position)
+        return false;
 
-    //GetMouse(&cursor_point);
     int x, y;
     SDL_GetMouseState(&x, &y);
 
-    screen_pos.mX = x;
-    screen_pos.mY = y;
+    // SDL_GetMouseState returns coordinates relative to the window in physical pixels
+    // Convert to logical window coordinates (LLCoordWindow uses logical pixels)
+    position->mX = (S32)(x / mDPIScaleX);
+    position->mY = (S32)(y / mDPIScaleY);
 
-    return convertCoords(screen_pos, position);
+    LL_DEBUGS("DPI") << "getCursorPosition SDL physical: " << x << ", " << y 
+                     << " -> logical: " << position->mX << ", " << position->mY
+                     << " (scale: " << mDPIScaleX << "x" << mDPIScaleY << ")" << LL_ENDL;
+
+    return true;
 }
 
+void LLWindowSDL::saveCursorPositionForRelativeMode()
+{
+    if (!mRelativeModeActive && mRestoreCursorOnModeChange)
+    {
+        LLCoordWindow current_pos;
+        if (getCursorPosition(&current_pos))
+        {
+            mPreRelativeModePos = current_pos;
+            LL_DEBUGS("Mouse") << "Saved cursor position before relative mode: (" 
+                              << mPreRelativeModePos.mX << ", " << mPreRelativeModePos.mY << ")" << LL_ENDL;
+        }
+    }
+}
+
+void LLWindowSDL::restoreCursorPositionFromRelativeMode()
+{
+    if (mRelativeModeActive && mRestoreCursorOnModeChange && 
+        mPreRelativeModePos.mX >= 0 && mPreRelativeModePos.mY >= 0)
+    {
+        LL_DEBUGS("Mouse") << "Restoring cursor position after relative mode: (" 
+                          << mPreRelativeModePos.mX << ", " << mPreRelativeModePos.mY << ")" << LL_ENDL;
+        
+        // Flush events before restoring to prevent accumulation
+        SDL_FlushEvent(SDL_MOUSEMOTION);
+        
+        // Set cursor position without triggering relative mode checks
+        LLCoordScreen screen_pos;
+        if (convertCoords(mPreRelativeModePos, &screen_pos))
+        {
+            SDL_WarpMouseInWindow(mWindow, screen_pos.mX, screen_pos.mY);
+            mPreRelativeModePos.set(-1, -1);  // Clear saved position
+            
+            // Flush events after warping to clear any generated events
+            SDL_FlushEvent(SDL_MOUSEMOTION);
+        }
+    }
+}
+
+void LLWindowSDL::setRelativeModeState(bool active)
+{
+    // Validate window exists before performing operations
+    if (!mWindow)
+    {
+        LL_WARNS("Mouse") << "Cannot set relative mode state: window not available" << LL_ENDL;
+        return;
+    }
+    
+    if (mRelativeModeActive != active)
+    {
+        if (active)
+        {
+            // Entering relative mode - save position and flush events
+            saveCursorPositionForRelativeMode();
+            
+            // Flush any pending mouse motion events to prevent accumulation
+            SDL_FlushEvent(SDL_MOUSEMOTION);
+            
+            // Clear accumulated deltas
+            mRelativeDeltaX = 0;
+            mRelativeDeltaY = 0;
+        }
+        else
+        {
+            // Exiting relative mode - flush events first
+            SDL_FlushEvent(SDL_MOUSEMOTION);
+            
+            // Clear deltas before restoring position
+            mRelativeDeltaX = 0;
+            mRelativeDeltaY = 0;
+            
+            // Now restore cursor position
+            restoreCursorPositionFromRelativeMode();
+            
+            // Flush events again after position restoration to clear any generated by warp
+            SDL_FlushEvent(SDL_MOUSEMOTION);
+        }
+        
+        mRelativeModeActive = active;
+        LL_DEBUGS("Mouse") << "Relative mode state changed to: " << (active ? "active" : "inactive") << LL_ENDL;
+    }
+}
 
 F32 LLWindowSDL::getNativeAspectRatio()
 {
@@ -1901,8 +2047,10 @@ bool LLWindowSDL::convertCoords(LLCoordGL from, LLCoordWindow *to)
     if (!to)
         return false;
 
-    to->mX = from.mX;
-    to->mY = mSurface->h - from.mY - 1;
+    // Convert from OpenGL coordinates to window coordinates
+    // GL uses drawable size, Window uses logical size
+    to->mX = (S32)(from.mX / mDPIScaleX);
+    to->mY = (S32)((mDrawableHeight - from.mY - 1) / mDPIScaleY);
 
     return true;
 }
@@ -1912,8 +2060,10 @@ bool LLWindowSDL::convertCoords(LLCoordWindow from, LLCoordGL* to)
     if (!to)
         return false;
 
-    to->mX = from.mX;
-    to->mY = mSurface->h - from.mY - 1;
+    // Convert from window coordinates to OpenGL coordinates
+    // Window uses logical size, GL uses drawable size
+    to->mX = (S32)(from.mX * mDPIScaleX);
+    to->mY = (S32)(mDrawableHeight - (from.mY * mDPIScaleY) - 1);
 
     return true;
 }
@@ -1923,10 +2073,18 @@ bool LLWindowSDL::convertCoords(LLCoordScreen from, LLCoordWindow* to)
     if (!to)
         return false;
 
-    // In the fullscreen case, window and screen coordinates are the same.
-    to->mX = from.mX;
-    to->mY = from.mY;
-    return (true);
+    // Convert from screen coordinates to window coordinates
+    // Screen coordinates are typically in physical pixels, window in logical pixels
+    if (mFullscreen) {
+        // In fullscreen, coordinates are the same
+        to->mX = from.mX;
+        to->mY = from.mY;
+    } else {
+        // Apply DPI scaling conversion
+        to->mX = (S32)(from.mX / mDPIScaleX);
+        to->mY = (S32)(from.mY / mDPIScaleY);
+    }
+    return true;
 }
 
 bool LLWindowSDL::convertCoords(LLCoordWindow from, LLCoordScreen *to)
@@ -1934,10 +2092,18 @@ bool LLWindowSDL::convertCoords(LLCoordWindow from, LLCoordScreen *to)
     if (!to)
         return false;
 
-    // In the fullscreen case, window and screen coordinates are the same.
-    to->mX = from.mX;
-    to->mY = from.mY;
-    return (true);
+    // Convert from window coordinates to screen coordinates
+    // Window coordinates are in logical pixels, screen in physical pixels
+    if (mFullscreen) {
+        // In fullscreen, coordinates are the same
+        to->mX = from.mX;
+        to->mY = from.mY;
+    } else {
+        // Apply DPI scaling conversion
+        to->mX = (S32)(from.mX * mDPIScaleX);
+        to->mY = (S32)(from.mY * mDPIScaleY);
+    }
+    return true;
 }
 
 bool LLWindowSDL::convertCoords(LLCoordScreen from, LLCoordGL *to)
@@ -1955,6 +2121,272 @@ bool LLWindowSDL::convertCoords(LLCoordGL from, LLCoordScreen *to)
 }
 
 
+void LLWindowSDL::updateDPIScaling()
+{
+    if (!mWindow)
+    {
+        mDPIScaleX = 1.0f;
+        mDPIScaleY = 1.0f;
+        mDrawableWidth = 0;
+        mDrawableHeight = 0;
+        return;
+    }
+    
+    int window_w, window_h;
+    int drawable_w, drawable_h;
+    
+    // Get logical window size
+    SDL_GetWindowSize(mWindow, &window_w, &window_h);
+    
+    // Get actual drawable size (which accounts for DPI scaling)
+    SDL_GL_GetDrawableSize(mWindow, &drawable_w, &drawable_h);
+    
+    // Calculate DPI scale factors
+    mDPIScaleX = (window_w > 0) ? (float)drawable_w / window_w : 1.0f;
+    mDPIScaleY = (window_h > 0) ? (float)drawable_h / window_h : 1.0f;
+    
+    mDrawableWidth = drawable_w;
+    mDrawableHeight = drawable_h;
+    
+    LL_INFOS() << "DPI Scaling - Window: " << window_w << "x" << window_h 
+               << ", Drawable: " << drawable_w << "x" << drawable_h
+               << ", Scale: " << mDPIScaleX << "x" << mDPIScaleY << LL_ENDL;
+    
+    // Log XWayland fractional scaling status if active
+    if (mXWaylandFractionalScaling)
+    {
+        LL_INFOS("XWaylandScaling") << "XWayland fractional scaling active - Wayland scale: " << mWaylandScaleFactor
+                                   << ", Coordinate compensation: " << mCoordinateCompensationX << "x" << mCoordinateCompensationY << LL_ENDL;
+    }
+}
+
+void LLWindowSDL::detectXWaylandScaling()
+{
+    // Reset XWayland fractional scaling detection
+    mXWaylandFractionalScaling = false;
+    mWaylandScaleFactor = 1.0f;
+    mCoordinateCompensationX = 1.0f;
+    mCoordinateCompensationY = 1.0f;
+    mXWaylandCompensationEnabled = true; // Default to enabled, can be toggled for testing
+    
+    // Auto-test mode for coordinate debugging - checks environment variable
+    const char* test_mode_env = std::getenv("FIRESTORM_COORDINATE_TEST_MODE");
+    if (test_mode_env)
+    {
+        int test_mode = atoi(test_mode_env);
+        LL_INFOS("XWaylandTesting") << "Environment variable FIRESTORM_COORDINATE_TEST_MODE=" << test_mode << " detected" << LL_ENDL;
+        
+        // We'll apply the test mode after detection is complete
+    }
+
+    // Check if we're running under XWayland
+    const char* session_type = std::getenv("XDG_SESSION_TYPE");
+    const char* wayland_display = std::getenv("WAYLAND_DISPLAY");
+    
+    if (!session_type || strcmp(session_type, "wayland") != 0 || !wayland_display)
+    {
+        LL_INFOS("XWaylandScaling") << "Not running under XWayland - no compensation needed" << LL_ENDL;
+        return;
+    }
+    
+    LL_INFOS("XWaylandScaling") << "XWayland session detected, checking for fractional scaling" << LL_ENDL;
+    
+    // Try to detect GNOME Mutter display config using gdbus
+    // This command gets the current display configuration including scale factor
+    FILE* fp = popen("gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig --method org.gnome.Mutter.DisplayConfig.GetCurrentState 2>/dev/null", "r");
+    
+    if (fp)
+    {
+        char buffer[4096];
+        std::string output;
+        
+        while (fgets(buffer, sizeof(buffer), fp))
+        {
+            output += buffer;
+        }
+        pclose(fp);
+        
+        // Parse the output to extract the current scale factor
+        // Look for patterns like "1.7518248558044434" in the output
+        std::size_t scale_pos = output.find("'is-current': <true>");
+        if (scale_pos != std::string::npos)
+        {
+            // Search backwards for the scale factor before 'is-current': <true>
+            std::size_t search_start = std::max(0, (int)scale_pos - 200);
+            std::string search_area = output.substr(search_start, scale_pos - search_start);
+            
+            // Look for floating point numbers that could be scale factors
+            // Typical fractional scale factors: 1.25, 1.5, 1.75, 2.0, etc.
+            size_t pos = search_area.rfind(", ");
+            if (pos != std::string::npos)
+            {
+                pos += 2; // Skip ", "
+                size_t end = search_area.find(",", pos);
+                if (end == std::string::npos) end = search_area.find(" ", pos);
+                if (end != std::string::npos)
+                {
+                    std::string scale_str = search_area.substr(pos, end - pos);
+                    try
+                    {
+                        float scale = std::stof(scale_str);
+                        if (scale >= 1.1f && scale <= 4.0f) // Reasonable scale factor range
+                        {
+                            mWaylandScaleFactor = scale;
+                            
+                            // If scale factor is not 1.0, we need fractional scaling compensation
+                            if (abs(scale - 1.0f) > 0.01f)
+                            {
+                                mXWaylandFractionalScaling = true;
+                                
+                                // XWayland coordinate compensation
+                                // Physical coordinates come in at native resolution but need adjustment
+                                mCoordinateCompensationX = 1.0f / scale;
+                                mCoordinateCompensationY = 1.0f / scale;
+                                
+                                LL_INFOS("XWaylandScaling") << "XWayland fractional scaling detected: " << scale 
+                                                           << ", compensation: " << mCoordinateCompensationX << LL_ENDL;
+                            }
+                        }
+                    }
+                    catch (const std::exception& e)
+                    {
+                        LL_WARNS("XWaylandScaling") << "Failed to parse scale factor: " << scale_str << LL_ENDL;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fallback: Try to detect scaling through xrandr if gdbus failed
+    if (!mXWaylandFractionalScaling)
+    {
+        fp = popen("xrandr --listmonitors 2>/dev/null", "r");
+        if (fp)
+        {
+            char buffer[256];
+            if (fgets(buffer, sizeof(buffer), fp)) // Skip header
+            {
+                if (fgets(buffer, sizeof(buffer), fp)) // Read monitor line
+                {
+                    // Parse format like " 0: +*DP-3 4384/600x2466/340+0+0  DP-3"
+                    int width_px, width_mm, height_px, height_mm;
+                    if (sscanf(buffer, "%*d: %*s %d/%dx%d/%d", &width_px, &width_mm, &height_px, &height_mm) == 4)
+                    {
+                        // Calculate DPI and infer scaling
+                        float dpi_x = (float)width_px * 25.4f / width_mm;
+                        float dpi_y = (float)height_px * 25.4f / height_mm;
+                        float avg_dpi = (dpi_x + dpi_y) / 2.0f;
+                        
+                        // Standard DPI is 96, so scaling factor approximation
+                        float inferred_scale = avg_dpi / 96.0f;
+                        
+                        // Check if this looks like fractional scaling (1.25, 1.5, 1.75, 2.0, etc.)
+                        if (inferred_scale >= 1.1f && inferred_scale <= 4.0f)
+                        {
+                            mWaylandScaleFactor = inferred_scale;
+                            mXWaylandFractionalScaling = true;
+                            mCoordinateCompensationX = 1.0f / inferred_scale;
+                            mCoordinateCompensationY = 1.0f / inferred_scale;
+                            
+                            LL_INFOS("XWaylandScaling") << "XWayland scaling inferred from DPI: " << inferred_scale 
+                                                       << " (DPI: " << avg_dpi << ", compensation: " << mCoordinateCompensationX << ")" << LL_ENDL;
+                        }
+                    }
+                }
+            }
+            pclose(fp);
+        }
+    }
+    
+    if (!mXWaylandFractionalScaling)
+    {
+        LL_INFOS("XWaylandScaling") << "No XWayland fractional scaling detected - using standard coordinate handling" << LL_ENDL;
+    }
+    
+    // Apply test mode if specified via environment variable
+    const char* test_mode_env = std::getenv("FIRESTORM_COORDINATE_TEST_MODE");
+    if (test_mode_env && mXWaylandFractionalScaling)
+    {
+        int test_mode = atoi(test_mode_env);
+        LL_INFOS("XWaylandTesting") << "Applying coordinate test mode " << test_mode << " from environment variable" << LL_ENDL;
+        testCoordinateCompensation(test_mode);
+    }
+}
+
+void LLWindowSDL::logCoordinateDebugInfo(const char* event_name, float original_x, float original_y, float compensated_x, float compensated_y)
+{
+    if (mXWaylandFractionalScaling)
+    {
+        LL_DEBUGS("XWaylandScaling") << event_name << " coordinate compensation: (" 
+                                    << original_x << "," << original_y 
+                                    << ") -> (" << compensated_x << "," << compensated_y << ")"
+                                    << " [Scale factor: " << mWaylandScaleFactor 
+                                    << ", Compensation: " << mCoordinateCompensationX << "x" << mCoordinateCompensationY << "]" << LL_ENDL;
+    }
+}
+
+void LLWindowSDL::logDetailedCoordinateFlow(const char* stage, float x, float y, const char* description)
+{
+    LL_INFOS("CoordinateFlow") << "STAGE: " << stage 
+                              << " | COORDS: (" << x << "," << y << ")"
+                              << " | DESC: " << description
+                              << " | DPI Scale: (" << mDPIScaleX << "," << mDPIScaleY << ")"
+                              << " | XWayland: " << (mXWaylandFractionalScaling ? "ON" : "OFF")
+                              << " | Compensation: " << (mXWaylandCompensationEnabled ? "ENABLED" : "DISABLED")
+                              << LL_ENDL;
+}
+
+void LLWindowSDL::setXWaylandCompensationEnabled(bool enabled)
+{
+    mXWaylandCompensationEnabled = enabled;
+    LL_INFOS("XWaylandTesting") << "XWayland compensation " << (enabled ? "ENABLED" : "DISABLED") << " for testing" << LL_ENDL;
+}
+
+void LLWindowSDL::testCoordinateCompensation(int mode)
+{
+    if (!mXWaylandFractionalScaling)
+    {
+        LL_INFOS("XWaylandTesting") << "Cannot test compensation - XWayland fractional scaling not detected" << LL_ENDL;
+        return;
+    }
+    
+    float original_compensation = 1.0f / mWaylandScaleFactor;
+    
+    switch (mode)
+    {
+        case 0: // Disabled
+            mXWaylandCompensationEnabled = false;
+            LL_INFOS("XWaylandTesting") << "Testing mode 0: Compensation DISABLED" << LL_ENDL;
+            break;
+            
+        case 1: // Normal (default)
+            mXWaylandCompensationEnabled = true;
+            mCoordinateCompensationX = original_compensation;
+            mCoordinateCompensationY = original_compensation;
+            LL_INFOS("XWaylandTesting") << "Testing mode 1: NORMAL compensation (" << original_compensation << "x)" << LL_ENDL;
+            break;
+            
+        case 2: // Inverted (multiply instead of divide)
+            mXWaylandCompensationEnabled = true;
+            mCoordinateCompensationX = mWaylandScaleFactor;
+            mCoordinateCompensationY = mWaylandScaleFactor;
+            LL_INFOS("XWaylandTesting") << "Testing mode 2: INVERTED compensation (" << mWaylandScaleFactor << "x)" << LL_ENDL;
+            break;
+            
+        case 3: // Double compensation (for testing double-scaling theory)
+            mXWaylandCompensationEnabled = true;
+            mCoordinateCompensationX = original_compensation * original_compensation;
+            mCoordinateCompensationY = original_compensation * original_compensation;
+            LL_INFOS("XWaylandTesting") << "Testing mode 3: DOUBLE compensation (" << (original_compensation * original_compensation) << "x)" << LL_ENDL;
+            break;
+            
+        default:
+            LL_INFOS("XWaylandTesting") << "Invalid test mode " << mode << ". Use 0=disabled, 1=normal, 2=inverted, 3=double" << LL_ENDL;
+            return;
+    }
+    
+    LL_INFOS("XWaylandTesting") << "Click on a UI element to see coordinate transformation with mode " << mode << LL_ENDL;
+}
 
 
 void LLWindowSDL::setupFailure(const std::string& text, const std::string& caption, U32 type)
@@ -2396,8 +2828,21 @@ void LLWindowSDL::gatherInput()
                 else
                 {
                     // Standard absolute coordinate handling
-                    winCoord.mX = event.motion.x;
-                    winCoord.mY = event.motion.y;
+                    // SDL events provide physical pixel coordinates - convert to logical coordinates
+                    // Apply XWayland fractional scaling compensation if needed
+                    float compensated_x = event.motion.x;
+                    float compensated_y = event.motion.y;
+                    
+                    if (mXWaylandFractionalScaling)
+                    {
+                        compensated_x *= mCoordinateCompensationX;
+                        compensated_y *= mCoordinateCompensationY;
+                        
+                        logCoordinateDebugInfo("MOUSEMOTION", event.motion.x, event.motion.y, compensated_x, compensated_y);
+                    }
+                    
+                    winCoord.mX = (S32)(compensated_x / mDPIScaleX);
+                    winCoord.mY = (S32)(compensated_y / mDPIScaleY);
                 }
                 
                 // Validate coordinates for multi-monitor setups (skip when in relative mode)
@@ -2547,9 +2992,42 @@ void LLWindowSDL::gatherInput()
             case SDL_MOUSEBUTTONDOWN:
             {
                 bool isDoubleClick = false;
-                LLCoordWindow winCoord(event.button.x, event.button.y);
+                
+                // Stage 1: Raw SDL coordinates
+                float raw_x = event.button.x;
+                float raw_y = event.button.y;
+                logDetailedCoordinateFlow("1-RAW_SDL", raw_x, raw_y, "Raw SDL event coordinates");
+                
+                // Stage 2: XWayland fractional scaling compensation (if enabled and detected)
+                float compensated_x = raw_x;
+                float compensated_y = raw_y;
+                
+                if (mXWaylandFractionalScaling && mXWaylandCompensationEnabled)
+                {
+                    compensated_x *= mCoordinateCompensationX;
+                    compensated_y *= mCoordinateCompensationY;
+                    
+                    logCoordinateDebugInfo("MOUSEBUTTONDOWN", raw_x, raw_y, compensated_x, compensated_y);
+                    logDetailedCoordinateFlow("2-XWAYLAND_COMPENSATED", compensated_x, compensated_y, "After XWayland compensation");
+                }
+                else
+                {
+                    logDetailedCoordinateFlow("2-XWAYLAND_SKIPPED", compensated_x, compensated_y, 
+                        mXWaylandFractionalScaling ? "Compensation disabled for testing" : "No XWayland scaling detected");
+                }
+                
+                // Stage 3: DPI scaling conversion
+                float dpi_adjusted_x = compensated_x / mDPIScaleX;
+                float dpi_adjusted_y = compensated_y / mDPIScaleY;
+                logDetailedCoordinateFlow("3-DPI_ADJUSTED", dpi_adjusted_x, dpi_adjusted_y, "After DPI scaling division");
+                
+                LLCoordWindow winCoord((S32)dpi_adjusted_x, (S32)dpi_adjusted_y);
+                logDetailedCoordinateFlow("4-WINDOW_COORD", winCoord.mX, winCoord.mY, "LLCoordWindow (integer)");
+                
                 LLCoordGL openGlCoord;
                 convertCoords(winCoord, &openGlCoord);
+                logDetailedCoordinateFlow("5-OPENGL_COORD", openGlCoord.mX, openGlCoord.mY, "Final LLCoordGL sent to viewer");
+                
                 MASK mask = gKeyboard->currentMask(true);
 
                 if (event.button.button == SDL_BUTTON_LEFT)   // SDL doesn't manage double clicking...
@@ -2610,7 +3088,23 @@ void LLWindowSDL::gatherInput()
 
             case SDL_MOUSEBUTTONUP:
             {
-                LLCoordWindow winCoord(event.button.x, event.button.y);
+                // SDL events provide physical pixel coordinates - convert to logical window coordinates
+                // Apply XWayland fractional scaling compensation if needed
+                float compensated_x = event.button.x;
+                float compensated_y = event.button.y;
+                
+                if (mXWaylandFractionalScaling)
+                {
+                    compensated_x *= mCoordinateCompensationX;
+                    compensated_y *= mCoordinateCompensationY;
+                    
+                    logCoordinateDebugInfo("MOUSEBUTTONUP", event.button.x, event.button.y, compensated_x, compensated_y);
+                }
+                
+                LLCoordWindow winCoord(
+                    (S32)(compensated_x / mDPIScaleX),
+                    (S32)(compensated_y / mDPIScaleY)
+                );
                 
                 // XWayland cursor position validation - only for extreme edge cases
                 // Simplified to avoid interfering with normal Alt-drag camera operations
@@ -2656,6 +3150,12 @@ void LLWindowSDL::gatherInput()
                     S32 width = llmax(event.window.data1, (S32)mMinWindowWidth);
                     S32 height = llmax(event.window.data2, (S32)mMinWindowHeight);
                     mSurface = SDL_GetWindowSurface( mWindow );
+                    
+                    // Update DPI scaling on resize
+                    updateDPIScaling();
+                    
+                    // Re-detect XWayland fractional scaling in case display configuration changed
+                    detectXWaylandScaling();
 
                     // *FIX: I'm not sure this is necessary!
                     // <FS:ND> I think is is not

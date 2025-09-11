@@ -126,9 +126,15 @@ bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
     // Enable relative mouse mode for Alt+drag camera controls with window grab for desktop isolation
     if (mask & (MASK_ALT | MASK_ORBIT | MASK_PAN) || gCameraBtnOrbit || gCameraBtnPan || gCameraBtnZoom)
     {
-        SDL_SetRelativeMouseMode(SDL_TRUE);
-        SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_TRUE);
-        SDL_RaiseWindow(SDL_GetMouseFocus());
+        // Save cursor position before entering relative mode
+        LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow());
+        if (sdl_window && sdl_window->getSDLWindow())
+        {
+            sdl_window->setRelativeModeState(true);
+            SDL_SetRelativeMouseMode(SDL_TRUE);
+            SDL_SetWindowGrab(sdl_window->getSDLWindow(), SDL_TRUE);
+            SDL_RaiseWindow(sdl_window->getSDLWindow());
+        }
         LL_DEBUGS("Mouse") << "Enabled relative mouse mode with window grab for camera controls" << LL_ENDL;
     }
 
@@ -378,8 +384,14 @@ bool LLToolCamera::handleMouseUp(S32 x, S32 y, MASK mask)
         }
 
         // Disable relative mouse mode and window grab for camera controls
-        SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_FALSE);
-        SDL_SetRelativeMouseMode(SDL_FALSE);
+        LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow());
+        if (sdl_window && sdl_window->getSDLWindow())
+        {
+            SDL_SetWindowGrab(sdl_window->getSDLWindow(), SDL_FALSE);
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+            sdl_window->setRelativeModeState(false);
+        }
+        
         LL_DEBUGS("Mouse") << "Disabled relative mouse mode and window grab for camera controls" << LL_ENDL;
 
         // calls releaseMouse() internally
@@ -612,8 +624,18 @@ bool LLToolCamera::handleRightMouseUp(S32 x, S32 y, MASK mask)
 void LLToolCamera::onMouseCaptureLost()
 {
     // Disable relative mouse mode and window grab when capture is lost
-    SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_FALSE);
-    SDL_SetRelativeMouseMode(SDL_FALSE);
+    LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow());
+    if (sdl_window && sdl_window->getSDLWindow())
+    {
+        SDL_SetWindowGrab(sdl_window->getSDLWindow(), SDL_FALSE);
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        sdl_window->setRelativeModeState(false);
+    }
+    if (sdl_window)
+    {
+        sdl_window->setRelativeModeState(false);
+    }
+    
     LL_DEBUGS("Mouse") << "Disabled relative mouse mode and window grab on capture lost" << LL_ENDL;
 
     releaseMouse();

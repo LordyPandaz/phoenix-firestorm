@@ -251,7 +251,14 @@ void LLUI::setMousePositionScreen(S32 x, S32 y)
     S32 screen_y = ll_round((F32)y * getScaleFactor().mV[VY]);
 #endif
 
-    LLView::getWindow()->setCursorPosition(LLCoordGL(screen_x, screen_y).convert());
+    // Convert screen coordinates to window coordinates properly
+    // Don't use LLCoordGL (which has inverted Y-axis) for screen coordinates!
+    LLCoordScreen screen_coord(screen_x, screen_y);
+    LLCoordWindow window_coord;
+    if (LLView::getWindow()->convertCoords(screen_coord, &window_coord))
+    {
+        LLView::getWindow()->setCursorPosition(window_coord);
+    }
 }
 
 void LLUI::getMousePositionScreen(S32 *x, S32 *y)

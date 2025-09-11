@@ -72,11 +72,12 @@ void LLToolGun::handleSelect()
         
         // Enable relative mouse mode for mouselook with window grab for desktop isolation
         LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow());
-        if (sdl_window)
+        if (sdl_window && sdl_window->getSDLWindow())
         {
+            sdl_window->setRelativeModeState(true);
             SDL_SetRelativeMouseMode(SDL_TRUE);
-            SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_TRUE);
-            SDL_RaiseWindow(SDL_GetMouseFocus());
+            SDL_SetWindowGrab(sdl_window->getSDLWindow(), SDL_TRUE);
+            SDL_RaiseWindow(sdl_window->getSDLWindow());
             LL_DEBUGS("Mouse") << "Enabled relative mouse mode with window grab for mouselook" << LL_ENDL;
         }
         
@@ -97,10 +98,11 @@ void LLToolGun::handleDeselect()
     
     // Disable relative mouse mode and window grab for mouselook
     LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow());
-    if (sdl_window)
+    if (sdl_window && sdl_window->getSDLWindow())
     {
-        SDL_SetWindowGrab(SDL_GetMouseFocus(), SDL_FALSE);
+        SDL_SetWindowGrab(sdl_window->getSDLWindow(), SDL_FALSE);
         SDL_SetRelativeMouseMode(SDL_FALSE);
+        sdl_window->setRelativeModeState(false);
         LL_DEBUGS("Mouse") << "Disabled relative mouse mode and window grab for mouselook" << LL_ENDL;
     }
     
