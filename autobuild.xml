@@ -9,16 +9,6 @@
     <map>
       <key>SDL2</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (C) 1997-2023 Sam Lantinga</string>
-        <key>description</key>
-        <string>Simple DirectMedia Layer is a cross-platform multimedia library designed to provide low level access to audio, keyboard, mouse, joystick, 3D hardware via OpenGL, and 2D video framebuffer.</string>
-        <key>license</key>
-        <string>zlib</string>
-        <key>license_file</key>
-        <string>LICENSES/SDL.txt</string>
-        <key>name</key>
-        <string>SDL2</string>
         <key>platforms</key>
         <map>
           <key>linux64</key>
@@ -26,29 +16,29 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>0f6fbb52ffea1a55bf76a84a6688079f95674cbd</string>
-              <key>hash_algorithm</key>
-              <string>sha1</string>
+              <string>84d4cd5c9a4d70c4a0ac7a9f438b348c</string>
               <key>url</key>
-              <string>https://github.com/secondlife/3p-sdl2/releases/download/v2.28.0-1dc88c1/SDL2-2.28.0-linux64-1dc88c1.tar.zst</string>
+              <string>file:///home/joshosborne/src/3p-sdl/SDL2-2.32.10-linux64-252510812.tar.bz2</string>
             </map>
             <key>name</key>
             <string>linux64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>lgpl</string>
+        <key>license_file</key>
+        <string>LICENSES/SDL.txt</string>
+        <key>copyright</key>
+        <string>Copyright (C) 1997-2023 Sam Lantinga</string>
         <key>version</key>
-        <string>2.24.1</string>
+        <string>2.32.10</string>
+        <key>name</key>
+        <string>SDL2</string>
+        <key>description</key>
+        <string>Simple DirectMedia Layer is a cross-platform multimedia library designed to provide low level access to audio, keyboard, mouse, joystick, 3D hardware via OpenGL, and 2D video framebuffer.</string>
       </map>
       <key>gstreamer10</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (C) 2007 Free Software Foundation, Inc. &lt;http://fsf.org/&gt;</string>
-        <key>license</key>
-        <string>LGPL</string>
-        <key>license_file</key>
-        <string>LICENSES/gstreamer.txt</string>
-        <key>name</key>
-        <string>gstreamer10</string>
         <key>platforms</key>
         <map>
           <key>linux64</key>
@@ -64,19 +54,19 @@
             <string>linux64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>LGPL</string>
+        <key>license_file</key>
+        <string>LICENSES/gstreamer.txt</string>
+        <key>copyright</key>
+        <string>Copyright (C) 2007 Free Software Foundation, Inc. &lt;http://fsf.org/&gt;</string>
         <key>version</key>
         <string>0.10.6.294903</string>
+        <key>name</key>
+        <string>gstreamer10</string>
       </map>
       <key>breakpad</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (C) google</string>
-        <key>license</key>
-        <string>BSD</string>
-        <key>license_file</key>
-        <string>LICENSES/google_breakpad.txt</string>
-        <key>name</key>
-        <string>breakpad</string>
         <key>platforms</key>
         <map>
           <key>linux64</key>
@@ -92,19 +82,19 @@
             <string>linux64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>BSD</string>
+        <key>license_file</key>
+        <string>LICENSES/google_breakpad.txt</string>
+        <key>copyright</key>
+        <string>Copyright (C) google</string>
         <key>version</key>
         <string>2.48.0</string>
+        <key>name</key>
+        <string>breakpad</string>
       </map>
       <key>glib</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (C) glib project</string>
-        <key>license</key>
-        <string>LGPL</string>
-        <key>license_file</key>
-        <string>LICENSES/glib.txt</string>
-        <key>name</key>
-        <string>glib</string>
         <key>platforms</key>
         <map>
           <key>linux64</key>
@@ -122,19 +112,19 @@
             <string>linux64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>LGPL</string>
+        <key>license_file</key>
+        <string>LICENSES/glib.txt</string>
+        <key>copyright</key>
+        <string>Copyright (C) glib project</string>
         <key>version</key>
         <string>2.48.0</string>
+        <key>name</key>
+        <string>glib</string>
       </map>
       <key>fltk</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (C) fltk project</string>
-        <key>license</key>
-        <string>LGPL/fltk</string>
-        <key>license_file</key>
-        <string>LICENSES/fltk.txt</string>
-        <key>name</key>
-        <string>fltk</string>
         <key>platforms</key>
         <map>
           <key>linux64</key>
@@ -152,21 +142,19 @@
             <string>linux</string>
           </map>
         </map>
+        <key>license</key>
+        <string>LGPL/fltk</string>
+        <key>license_file</key>
+        <string>LICENSES/fltk.txt</string>
+        <key>copyright</key>
+        <string>Copyright (C) fltk project</string>
         <key>version</key>
         <string>1.3.5</string>
+        <key>name</key>
+        <string>fltk</string>
       </map>
       <key>jemalloc</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (C) 2002-present Jason Evans jasone@canonware.com.</string>
-        <key>description</key>
-        <string>jemalloc is a general purpose malloc(3) implementation that emphasizes fragmentation avoidance and scalable concurrency support.</string>
-        <key>license</key>
-        <string>jemalloc (BSD derived)</string>
-        <key>license_file</key>
-        <string>LICENSES/jemalloc.txt</string>
-        <key>name</key>
-        <string>jemalloc</string>
         <key>platforms</key>
         <map>
           <key>linux64</key>
@@ -182,17 +170,21 @@
             <string>linux64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>jemalloc (BSD derived)</string>
+        <key>license_file</key>
+        <string>LICENSES/jemalloc.txt</string>
+        <key>copyright</key>
+        <string>Copyright (C) 2002-present Jason Evans jasone@canonware.com.</string>
         <key>version</key>
         <string>5.1.0</string>
+        <key>name</key>
+        <string>jemalloc</string>
+        <key>description</key>
+        <string>jemalloc is a general purpose malloc(3) implementation that emphasizes fragmentation avoidance and scalable concurrency support.</string>
       </map>
       <key>ndPhysicsStub</key>
       <map>
-        <key>license</key>
-        <string>HACD/LGPL</string>
-        <key>license_file</key>
-        <string>LICENSES/ndPhysicsStub.txt</string>
-        <key>name</key>
-        <string>ndPhysicsStub</string>
         <key>platforms</key>
         <map>
           <key>darwin</key>
@@ -232,17 +224,15 @@
             <string>windows64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>HACD/LGPL</string>
+        <key>license_file</key>
+        <string>LICENSES/ndPhysicsStub.txt</string>
+        <key>name</key>
+        <string>ndPhysicsStub</string>
       </map>
       <key>glod</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright 2003 Jonathan Cohen, Nat Duca, David Luebke, Brenden Schubert - Johns Hopkins University and University of Virginia</string>
-        <key>license</key>
-        <string>GLOD Open-Source License   Version 1.0</string>
-        <key>license_file</key>
-        <string>LICENSES/GLOD.txt</string>
-        <key>name</key>
-        <string>glod</string>
         <key>platforms</key>
         <map>
           <key>darwin64</key>
@@ -282,19 +272,19 @@
             <string>windows64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>GLOD Open-Source License   Version 1.0</string>
+        <key>license_file</key>
+        <string>LICENSES/GLOD.txt</string>
+        <key>copyright</key>
+        <string>Copyright 2003 Jonathan Cohen, Nat Duca, David Luebke, Brenden Schubert - Johns Hopkins University and University of Virginia</string>
         <key>version</key>
         <string>1.0pre3.532346</string>
+        <key>name</key>
+        <string>glod</string>
       </map>
       <key>gntp-growl</key>
       <map>
-        <key>copyright</key>
-        <string>The Growl Project</string>
-        <key>description</key>
-        <string>A unified notification system for Mac OS X</string>
-        <key>license</key>
-        <string>bsd</string>
-        <key>name</key>
-        <string>gntp-growl</string>
         <key>platforms</key>
         <map>
           <key>darwin</key>
@@ -334,19 +324,17 @@
             <string>windows64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>bsd</string>
+        <key>copyright</key>
+        <string>The Growl Project</string>
+        <key>name</key>
+        <string>gntp-growl</string>
+        <key>description</key>
+        <string>A unified notification system for Mac OS X</string>
       </map>
       <key>discord-rpc</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright 2019 Discord, Inc.</string>
-        <key>description</key>
-        <string>C++ library to interface with Discord's API</string>
-        <key>license</key>
-        <string>MIT</string>
-        <key>license_file</key>
-        <string>LICENSES/discord-rpc.txt</string>
-        <key>name</key>
-        <string>discord-rpc</string>
         <key>platforms</key>
         <map>
           <key>windows64</key>
@@ -386,6 +374,16 @@
             <string>darwin64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>MIT</string>
+        <key>license_file</key>
+        <string>LICENSES/discord-rpc.txt</string>
+        <key>copyright</key>
+        <string>Copyright 2019 Discord, Inc.</string>
+        <key>name</key>
+        <string>discord-rpc</string>
+        <key>description</key>
+        <string>C++ library to interface with Discord's API</string>
       </map>
       <key>apr_suite</key>
       <map>
@@ -449,16 +447,6 @@
       </map>
       <key>boost</key>
       <map>
-        <key>copyright</key>
-        <string>(see individual source files)</string>
-        <key>description</key>
-        <string>Boost C++ Libraries</string>
-        <key>license</key>
-        <string>boost 1.0</string>
-        <key>license_file</key>
-        <string>LICENSES/boost.txt</string>
-        <key>name</key>
-        <string>boost</string>
         <key>platforms</key>
         <map>
           <key>darwin64</key>
@@ -504,8 +492,18 @@
             <string>windows64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>boost 1.0</string>
+        <key>license_file</key>
+        <string>LICENSES/boost.txt</string>
+        <key>copyright</key>
+        <string>(see individual source files)</string>
         <key>version</key>
         <string>1.86</string>
+        <key>name</key>
+        <string>boost</string>
+        <key>description</key>
+        <string>Boost C++ Libraries</string>
       </map>
       <key>bugsplat</key>
       <map>
@@ -555,14 +553,6 @@
       </map>
       <key>colladadom</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright 2006 Sony Computer Entertainment Inc.</string>
-        <key>license</key>
-        <string>SCEA</string>
-        <key>license_file</key>
-        <string>LICENSES/collada.txt</string>
-        <key>name</key>
-        <string>colladadom</string>
         <key>platforms</key>
         <map>
           <key>darwin64</key>
@@ -608,8 +598,16 @@
             <string>windows64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>SCEA</string>
+        <key>license_file</key>
+        <string>LICENSES/collada.txt</string>
+        <key>copyright</key>
+        <string>Copyright 2006 Sony Computer Entertainment Inc.</string>
         <key>version</key>
         <string>2.3.0-r8</string>
+        <key>name</key>
+        <string>colladadom</string>
       </map>
       <key>cubemaptoequirectangular</key>
       <map>
@@ -761,16 +759,6 @@
       </map>
       <key>dullahan</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (c) 2017, Linden Research, Inc.</string>
-        <key>description</key>
-        <string>A headless browser SDK that uses the Chromium Embedded Framework (CEF). It is designed to make it easier to write applications that render modern web content directly to a memory buffer, inject synthesized mouse and keyboard events as well as interact with web based features like JavaScript or cookies.</string>
-        <key>license</key>
-        <string>MPL</string>
-        <key>license_file</key>
-        <string>LICENSES/LICENSE.txt</string>
-        <key>name</key>
-        <string>dullahan</string>
         <key>platforms</key>
         <map>
           <key>darwin64</key>
@@ -816,8 +804,18 @@
             <string>windows64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>MPL</string>
+        <key>license_file</key>
+        <string>LICENSES/LICENSE.txt</string>
+        <key>copyright</key>
+        <string>Copyright (c) 2017, Linden Research, Inc.</string>
         <key>version</key>
         <string>1.14.0.202408091639_118.4.1_g3dd6078_chromium-118.0.5993.54</string>
+        <key>name</key>
+        <string>dullahan</string>
+        <key>description</key>
+        <string>A headless browser SDK that uses the Chromium Embedded Framework (CEF). It is designed to make it easier to write applications that render modern web content directly to a memory buffer, inject synthesized mouse and keyboard events as well as interact with web based features like JavaScript or cookies.</string>
       </map>
       <key>emoji_shortcodes</key>
       <map>
@@ -936,11 +934,9 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>a459e2967306ff56a835a321dc00718c</string>
-              <key>hash_algorithm</key>
-              <string>md5</string>
+              <string>2d586bcf91728e98ce523ef978469af7</string>
               <key>url</key>
-              <string>file:///opt/firestorm/fmodstudio-2.03.07-linux64-251121739.tar.bz2</string>
+              <string>file:///home/joshosborne/src/3p-fmodstudio/fmodstudio-2.02.26-linux64-243650246.tar.bz2</string>
             </map>
             <key>name</key>
             <string>linux64</string>
@@ -959,30 +955,20 @@
           </map>
         </map>
         <key>license</key>
-        <string>fmod</string>
+        <string>fmodstudio</string>
         <key>license_file</key>
         <string>LICENSES/fmodstudio.txt</string>
         <key>copyright</key>
-        <string>FMOD Studio by Firelight Technologies Pty Ltd.</string>
+        <string>FMOD Studio, copyright (c) Firelight Technologies Pty, Ltd., 2012-2019.</string>
         <key>version</key>
-        <string>2.02.20</string>
+        <string>2.02.26</string>
         <key>name</key>
         <string>fmodstudio</string>
         <key>description</key>
-        <string>FMOD Studio API</string>
+        <string>FMOD Studio audio system library</string>
       </map>
       <key>freetype</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright 2006, 2007, 2008, 2009, 2010 by David Turner, Robert Wilhelm, and Werner Lemberg.</string>
-        <key>description</key>
-        <string>Font rendering library</string>
-        <key>license</key>
-        <string>FreeType</string>
-        <key>license_file</key>
-        <string>LICENSES/freetype.txt</string>
-        <key>name</key>
-        <string>freetype</string>
         <key>platforms</key>
         <map>
           <key>darwin64</key>
@@ -1028,8 +1014,18 @@
             <string>windows64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>FreeType</string>
+        <key>license_file</key>
+        <string>LICENSES/freetype.txt</string>
+        <key>copyright</key>
+        <string>Copyright 2006, 2007, 2008, 2009, 2010 by David Turner, Robert Wilhelm, and Werner Lemberg.</string>
         <key>version</key>
         <string>2.13.3-cb2e120</string>
+        <key>name</key>
+        <string>freetype</string>
+        <key>description</key>
+        <string>Font rendering library</string>
       </map>
       <key>glext</key>
       <map>
@@ -1361,17 +1357,17 @@
           </map>
         </map>
         <key>license</key>
-        <string>Kakadu</string>
+        <string>Commercial</string>
         <key>license_file</key>
         <string>LICENSES/kdu.txt</string>
         <key>copyright</key>
-        <string>Kakadu software</string>
+        <string>Copyright Kakadu Software</string>
         <key>version</key>
         <string>8.4.1</string>
         <key>name</key>
         <string>kdu</string>
         <key>description</key>
-        <string>JPEG2000 library by Kakadu</string>
+        <string>JPEG2000 decoder</string>
       </map>
       <key>libhunspell</key>
       <map>
@@ -1661,15 +1657,6 @@
       </map>
       <key>llca</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (c) 2016, Linden Research, Inc.; data provided by the Mozilla NSS Project.
-      </string>
-        <key>license</key>
-        <string>mit</string>
-        <key>license_file</key>
-        <string>LICENSES/ca-license.txt</string>
-        <key>name</key>
-        <string>llca</string>
         <key>platforms</key>
         <map>
           <key>common</key>
@@ -1687,8 +1674,17 @@
             <string>common</string>
           </map>
         </map>
+        <key>license</key>
+        <string>mit</string>
+        <key>license_file</key>
+        <string>LICENSES/ca-license.txt</string>
+        <key>copyright</key>
+        <string>Copyright (c) 2016, Linden Research, Inc.; data provided by the Mozilla NSS Project.
+      </string>
         <key>version</key>
         <string>202407221423.0</string>
+        <key>name</key>
+        <string>llca</string>
       </map>
       <key>llphysicsextensions_source</key>
       <map>
@@ -2283,18 +2279,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
       </map>
       <key>open-libndofdev</key>
       <map>
-        <key>license</key>
-        <string>BSD</string>
-        <key>license_file</key>
-        <string>LICENSES/libndofdev.txt</string>
-        <key>copyright</key>
-        <string>Copyright (c) 2008, Jan Ciger (jan.ciger (at) gmail.com)</string>
-        <key>version</key>
-        <string>0.3</string>
-        <key>name</key>
-        <string>open-libndofdev</string>
-        <key>description</key>
-        <string>Open Source replacement for 3DConnection SDK</string>
         <key>platforms</key>
         <map>
           <key>linux64</key>
@@ -2302,18 +2286,26 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>2d20683554f0b00234bbb84d0ce7ac1be1ad70aa</string>
-              <key>hash_algorithm</key>
-              <string>sha1</string>
+              <string>778a229b10e59fd28bfe633fcc980392</string>
               <key>url</key>
-              <string>https://github.com/secondlife/3p-open-libndofdev/releases/download/v1.14-r1/open_libndofdev-0.14.8503290964-linux64-8503290964.tar.zst</string>
+              <string>file:///home/joshosborne/src/3p-open-libndofdev/open_libndofdev-0.14.252510823-linux64-252510823.tar.bz2</string>
             </map>
             <key>name</key>
             <string>linux64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>BSD</string>
+        <key>license_file</key>
+        <string>LICENSES/libndofdev.txt</string>
+        <key>copyright</key>
+        <string>Copyright (c) 2008, Jan Ciger (jan.ciger (at) gmail.com)</string>
         <key>version</key>
-        <string>0.13.222872202</string>
+        <string>0.14.252510823</string>
+        <key>name</key>
+        <string>open-libndofdev</string>
+        <key>description</key>
+        <string>Open Source replacement for 3DConnection SDK</string>
       </map>
       <key>openal</key>
       <map>
@@ -2649,14 +2641,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
       </map>
       <key>threejs</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright © 2010-2021 three.js authors</string>
-        <key>license</key>
-        <string>MIT</string>
-        <key>license_file</key>
-        <string>LICENSES/THREEJS_LICENSE.txt</string>
-        <key>name</key>
-        <string>threejs</string>
         <key>platforms</key>
         <map>
           <key>common</key>
@@ -2674,8 +2658,16 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             <string>common</string>
           </map>
         </map>
+        <key>license</key>
+        <string>MIT</string>
+        <key>license_file</key>
+        <string>LICENSES/THREEJS_LICENSE.txt</string>
+        <key>copyright</key>
+        <string>Copyright © 2010-2021 three.js authors</string>
         <key>version</key>
         <string>0.132.2</string>
+        <key>name</key>
+        <string>threejs</string>
       </map>
       <key>tinygltf</key>
       <map>
@@ -2911,14 +2903,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
       </map>
       <key>vlc-bin</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (C) 1998-2016 VLC authors and VideoLAN</string>
-        <key>license</key>
-        <string>GPL2</string>
-        <key>license_file</key>
-        <string>LICENSES/vlc.txt</string>
-        <key>name</key>
-        <string>vlc-bin</string>
         <key>platforms</key>
         <map>
           <key>darwin64</key>
@@ -2950,8 +2934,16 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             <string>windows64</string>
           </map>
         </map>
+        <key>license</key>
+        <string>GPL2</string>
+        <key>license_file</key>
+        <string>LICENSES/vlc.txt</string>
+        <key>copyright</key>
+        <string>Copyright (C) 1998-2016 VLC authors and VideoLAN</string>
         <key>version</key>
         <string>3.0.21.10218721728</string>
+        <key>name</key>
+        <string>vlc-bin</string>
       </map>
       <key>vulkan_gltf</key>
       <map>
@@ -3149,16 +3141,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
       </map>
       <key>tinyexr</key>
       <map>
-        <key>copyright</key>
-        <string>Copyright (c) 2014 - 2021, Syoyo Fujita and many contributors.</string>
-        <key>description</key>
-        <string>tinyexr import library</string>
-        <key>license</key>
-        <string>3-clause BSD</string>
-        <key>license_file</key>
-        <string>LICENSES/tinyexr_license.txt</string>
-        <key>name</key>
-        <string>tinyexr</string>
         <key>platforms</key>
         <map>
           <key>common</key>
@@ -3176,16 +3158,26 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             <string>common</string>
           </map>
         </map>
-        <key>source_type</key>
-        <string>git</string>
+        <key>license</key>
+        <string>3-clause BSD</string>
+        <key>license_file</key>
+        <string>LICENSES/tinyexr_license.txt</string>
+        <key>copyright</key>
+        <string>Copyright (c) 2014 - 2021, Syoyo Fujita and many contributors.</string>
+        <key>version</key>
+        <string>1.0.9-5e8947c</string>
+        <key>name</key>
+        <string>tinyexr</string>
         <key>vcs_branch</key>
         <string>dependabot/github_actions/secondlife/action-autobuild-4</string>
         <key>vcs_revision</key>
         <string>4dc4d1d90d82a22843e2adf5130f9ecb5ee5769e</string>
         <key>vcs_url</key>
         <string>https://github.com/secondlife/3p-tinyexr</string>
-        <key>version</key>
-        <string>1.0.9-5e8947c</string>
+        <key>description</key>
+        <string>tinyexr import library</string>
+        <key>source_type</key>
+        <string>git</string>
       </map>
       <key>discord_sdk</key>
       <map>
@@ -3340,18 +3332,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>command</key>
-                <string>bash</string>
-                <key>options</key>
-                <array>
-                  <string>../scripts/configure_firestorm.sh</string>
-                  <string>--build</string>
-                  <string>--version</string>
-                  <string>--opensim</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>command</key>
@@ -3360,6 +3340,18 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                 <array>
                   <string>../scripts/configure_firestorm.sh</string>
                   <string>--config</string>
+                  <string>--version</string>
+                  <string>--opensim</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>command</key>
+                <string>bash</string>
+                <key>options</key>
+                <array>
+                  <string>../scripts/configure_firestorm.sh</string>
+                  <string>--build</string>
                   <string>--version</string>
                   <string>--opensim</string>
                 </array>
@@ -3369,19 +3361,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS_AVX</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>command</key>
-                <string>bash</string>
-                <key>options</key>
-                <array>
-                  <string>../scripts/configure_firestorm.sh</string>
-                  <string>--build</string>
-                  <string>--version</string>
-                  <string>--opensim</string>
-                  <string>--avx</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>command</key>
@@ -3390,6 +3369,19 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                 <array>
                   <string>../scripts/configure_firestorm.sh</string>
                   <string>--config</string>
+                  <string>--version</string>
+                  <string>--opensim</string>
+                  <string>--avx</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>command</key>
+                <string>bash</string>
+                <key>options</key>
+                <array>
+                  <string>../scripts/configure_firestorm.sh</string>
+                  <string>--build</string>
                   <string>--version</string>
                   <string>--opensim</string>
                   <string>--avx</string>
@@ -3400,19 +3392,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS_AVX2</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>command</key>
-                <string>bash</string>
-                <key>options</key>
-                <array>
-                  <string>../scripts/configure_firestorm.sh</string>
-                  <string>--build</string>
-                  <string>--version</string>
-                  <string>--opensim</string>
-                  <string>--avx2</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>command</key>
@@ -3421,6 +3400,19 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                 <array>
                   <string>../scripts/configure_firestorm.sh</string>
                   <string>--config</string>
+                  <string>--version</string>
+                  <string>--opensim</string>
+                  <string>--avx2</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>command</key>
+                <string>bash</string>
+                <key>options</key>
+                <array>
+                  <string>../scripts/configure_firestorm.sh</string>
+                  <string>--build</string>
                   <string>--version</string>
                   <string>--opensim</string>
                   <string>--avx2</string>
@@ -3431,18 +3423,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS_open</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>command</key>
-                <string>bash</string>
-                <key>options</key>
-                <array>
-                  <string>../scripts/configure_firestorm.sh</string>
-                  <string>--build</string>
-                  <string>--version</string>
-                  <string>--opensim</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>command</key>
@@ -3451,6 +3431,18 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                 <array>
                   <string>../scripts/configure_firestorm.sh</string>
                   <string>--config</string>
+                  <string>--version</string>
+                  <string>--opensim</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>command</key>
+                <string>bash</string>
+                <key>options</key>
+                <array>
+                  <string>../scripts/configure_firestorm.sh</string>
+                  <string>--build</string>
                   <string>--version</string>
                   <string>--opensim</string>
                 </array>
@@ -3460,19 +3452,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>RelWithDebInfoFS</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>command</key>
-                <string>bash</string>
-                <key>options</key>
-                <array>
-                  <string>../scripts/configure_firestorm.sh</string>
-                  <string>--btype RelWithDebInfo</string>
-                  <string>--build</string>
-                  <string>--version</string>
-                  <string>--opensim</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>command</key>
@@ -3482,6 +3461,19 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>../scripts/configure_firestorm.sh</string>
                   <string>--btype RelWithDebInfo</string>
                   <string>--config</string>
+                  <string>--version</string>
+                  <string>--opensim</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>command</key>
+                <string>bash</string>
+                <key>options</key>
+                <array>
+                  <string>../scripts/configure_firestorm.sh</string>
+                  <string>--btype RelWithDebInfo</string>
+                  <string>--build</string>
                   <string>--version</string>
                   <string>--opensim</string>
                 </array>
@@ -3491,19 +3483,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>RelWithDebInfoFS_open</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>command</key>
-                <string>bash</string>
-                <key>options</key>
-                <array>
-                  <string>../scripts/configure_firestorm.sh</string>
-                  <string>--btype RelWithDebInfo</string>
-                  <string>--build</string>
-                  <string>--version</string>
-                  <string>--opensim</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>command</key>
@@ -3513,6 +3492,19 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>../scripts/configure_firestorm.sh</string>
                   <string>--btype RelWithDebInfo</string>
                   <string>--config</string>
+                  <string>--version</string>
+                  <string>--opensim</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>command</key>
+                <string>bash</string>
+                <key>options</key>
+                <array>
+                  <string>../scripts/configure_firestorm.sh</string>
+                  <string>--btype RelWithDebInfo</string>
+                  <string>--build</string>
                   <string>--version</string>
                   <string>--opensim</string>
                 </array>
@@ -3556,10 +3548,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>$AUTOBUILD_CPU_COUNT</string>
                 </array>
               </map>
-              <!-- FS:Ansariel: This will cause packages being installed twice
-              <key>default</key>
-              <string>True</string>
-              -->
               <key>name</key>
               <string>RelWithDebInfo</string>
             </map>
@@ -3594,10 +3582,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             <map>
               <key>configure</key>
               <map>
-                <key>arguments</key>
-                <array>
-                  <string>../indra</string>
-                </array>
                 <key>options</key>
                 <array>
                   <string>-G</string>
@@ -3654,16 +3638,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>RelWithDebInfoFS</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>options</key>
-                <array>
-                  <string>--package</string>
-                  <string>--platform darwin</string>
-                  <string>--fmodstudio</string>
-                  <string>--kdu</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>options</key>
@@ -3674,29 +3648,35 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--kdu</string>
                 </array>
               </map>
-              <!-- FS:Ansariel: This will cause packages being installed twice
-              <key>default</key>
-              <string>True</string>
-              -->
+              <key>build</key>
+              <map>
+                <key>options</key>
+                <array>
+                  <string>--package</string>
+                  <string>--platform darwin</string>
+                  <string>--fmodstudio</string>
+                  <string>--kdu</string>
+                </array>
+              </map>
               <key>name</key>
               <string>RelWithDebInfoFS</string>
             </map>
             <key>RelWithDebInfoFS_open</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>options</key>
-                <array>
-                  <string>--package</string>
-                  <string>--platform darwin</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>options</key>
                 <array>
                   <string>--platform darwin</string>
                   <string>--package</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>options</key>
+                <array>
+                  <string>--package</string>
+                  <string>--platform darwin</string>
                 </array>
               </map>
               <key>name</key>
@@ -3704,15 +3684,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>options</key>
-                <array>
-                  <string>--platform darwin</string>
-                  <string>--fmodstudio</string>
-                  <string>--kdu</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>options</key>
@@ -3720,6 +3691,15 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--platform darwin</string>
                   <string>--kdu</string>
                   <string>--fmodstudio</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>options</key>
+                <array>
+                  <string>--platform darwin</string>
+                  <string>--fmodstudio</string>
+                  <string>--kdu</string>
                 </array>
               </map>
               <key>default</key>
@@ -3727,16 +3707,16 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
               <key>name</key>
               <string>ReleaseFS</string>
             </map>
-             <key>ReleaseFS_open</key>
+            <key>ReleaseFS_open</key>
             <map>
-              <key>build</key>
+              <key>configure</key>
               <map>
                 <key>options</key>
                 <array>
                   <string>--platform darwin</string>
                 </array>
               </map>
-              <key>configure</key>
+              <key>build</key>
               <map>
                 <key>options</key>
                 <array>
@@ -3776,10 +3756,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                 <key>command</key>
                 <string>ninja</string>
               </map>
-              <!-- FS:Ansariel: This will cause packages being installed twice
-              <key>default</key>
-              <string>True</string>
-              -->
               <key>name</key>
               <string>Release</string>
             </map>
@@ -3812,14 +3788,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>RelWithDebInfoFS</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>options</key>
-                <array>
-                  <string>--platform linux</string>
-                  <string>--package</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>options</key>
@@ -3830,15 +3798,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--package</string>
                 </array>
               </map>
-              <!-- FS:Ansariel: This will cause packages being installed twice
-              <key>default</key>
-              <string>True</string>
-              -->
-              <key>name</key>
-              <string>RelWithDebInfoFS</string>
-            </map>
-            <key>RelWithDebInfoFS_open</key>
-            <map>
               <key>build</key>
               <map>
                 <key>options</key>
@@ -3847,7 +3806,20 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--package</string>
                 </array>
               </map>
+              <key>name</key>
+              <string>RelWithDebInfoFS</string>
+            </map>
+            <key>RelWithDebInfoFS_open</key>
+            <map>
               <key>configure</key>
+              <map>
+                <key>options</key>
+                <array>
+                  <string>--platform linux</string>
+                  <string>--package</string>
+                </array>
+              </map>
+              <key>build</key>
               <map>
                 <key>options</key>
                 <array>
@@ -3860,20 +3832,20 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>options</key>
-                <array>
-                  <string>--build</string>
-                  <string>--platform linux</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>options</key>
                 <array>
                   <string>--kdu</string>
                   <string>--fmodstudio</string>
+                  <string>--platform linux</string>
+                </array>
+              </map>
+              <key>build</key>
+              <map>
+                <key>options</key>
+                <array>
+                  <string>--build</string>
                   <string>--platform linux</string>
                 </array>
               </map>
@@ -3884,19 +3856,19 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS_open</key>
             <map>
+              <key>configure</key>
+              <map>
+                <key>options</key>
+                <array>
+                  <string>--platform linux</string>
+                  <string>--package</string>
+                </array>
+              </map>
               <key>build</key>
               <map>
                 <key>options</key>
                 <array>
                   <string>--build</string>
-                  <string>--platform linux</string>
-                  <string>--package</string>
-                </array>
-              </map>
-              <key>configure</key>
-              <map>
-                <key>options</key>
-                <array>
                   <string>--platform linux</string>
                   <string>--package</string>
                 </array>
@@ -3944,10 +3916,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>SecondLife.sln</string>
                 </array>
               </map>
-              <!-- FS:Ansariel: This will cause packages being installed twice
-              <key>default</key>
-              <string>True</string>
-              -->
               <key>name</key>
               <string>RelWithDebInfo</string>
             </map>
@@ -4067,16 +4035,6 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>RelWithDebInfoFS</key>
             <map>
-              <key>build</key>
-              <map>
-                <key>options</key>
-                <array>
-                  <string>--fmodstudio</string>
-                  <string>--kdu</string>
-                  <string>--version</string>
-                  <string>--platform windows</string>
-                </array>
-              </map>
               <key>configure</key>
               <map>
                 <key>options</key>
@@ -4087,16 +4045,22 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--platform windows</string>
                 </array>
               </map>
-              <!-- FS:Ansariel: This will cause packages being installed twice
-              <key>default</key>
-              <string>True</string>
-              -->
+              <key>build</key>
+              <map>
+                <key>options</key>
+                <array>
+                  <string>--fmodstudio</string>
+                  <string>--kdu</string>
+                  <string>--version</string>
+                  <string>--platform windows</string>
+                </array>
+              </map>
               <key>name</key>
               <string>RelWithDebInfoFS</string>
             </map>
             <key>RelWithDebInfoFS_open</key>
             <map>
-              <key>build</key>
+              <key>configure</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4105,7 +4069,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--platform windows</string>
                 </array>
               </map>
-              <key>configure</key>
+              <key>build</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4119,7 +4083,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS</key>
             <map>
-              <key>build</key>
+              <key>configure</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4129,7 +4093,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--platform windows</string>
                 </array>
               </map>
-              <key>configure</key>
+              <key>build</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4146,7 +4110,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS_AVX</key>
             <map>
-              <key>build</key>
+              <key>configure</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4156,7 +4120,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--platform windows</string>
                 </array>
               </map>
-              <key>configure</key>
+              <key>build</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4171,7 +4135,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS_AVX2</key>
             <map>
-              <key>build</key>
+              <key>configure</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4181,7 +4145,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--platform windows</string>
                 </array>
               </map>
-              <key>configure</key>
+              <key>build</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4196,7 +4160,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
             </map>
             <key>ReleaseFS_open</key>
             <map>
-              <key>build</key>
+              <key>configure</key>
               <map>
                 <key>options</key>
                 <array>
@@ -4204,7 +4168,7 @@ Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors</string>
                   <string>--platform windows</string>
                 </array>
               </map>
-              <key>configure</key>
+              <key>build</key>
               <map>
                 <key>options</key>
                 <array>
