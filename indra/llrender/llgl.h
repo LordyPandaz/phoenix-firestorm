@@ -142,6 +142,11 @@ public:
     std::string mDriverVersionVendorString;
     std::string mGLVersionString;
 
+    // Actual NVIDIA driver version (parsed from vendor string)
+    // Note: mDriverVersionMajor contains OpenGL version, not driver version!
+    S32 mNvidiaDriverVersionMajor;
+    S32 mNvidiaDriverVersionMinor;
+
     U32 mVRAM; // VRAM in MB
     S32 mVRAMDetected; // <FS:Beq/> The amount detected/reported by the OS/Drivers. If different to mVRAM there is an override in place.
 

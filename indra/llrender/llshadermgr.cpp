@@ -706,8 +706,8 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
         }
         else if (major_version > 1 || minor_version >= 30)
         {  //switches are supported in GLSL 1.30 and later
-            if (gGLManager.mIsNVIDIA && gGLManager.mDriverVersionMajor < 300)
-            { //switches are unreliable on old NVIDIA drivers (pre-300 series)
+            if (gGLManager.mIsNVIDIA && gGLManager.mNvidiaDriverVersionMajor > 0 && gGLManager.mNvidiaDriverVersionMajor < 304)
+            { //switches are unreliable on old NVIDIA drivers (pre-304 series / pre-Kepler)
                 for (S32 i = 0; i < texture_index_channels; ++i)
                 {
                     std::string if_string = llformat("\t%sif (vary_texture_index == %d) { return texture(tex%d, texcoord); }\n", i > 0 ? "else " : "", i, i);
@@ -898,15 +898,26 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
         if (error != GL_NO_ERROR || success == GL_FALSE)
         {
             //an error occured, print log
-            LL_WARNS("ShaderLoading") << "GLSL Compilation Error:" << LL_ENDL;
+            LL_WARNS("ShaderLoading") << "GLSL Compilation Error for: " << open_file_name << LL_ENDL;
             dumpObjectLog(ret, true, open_file_name);
             dumpShaderSource(shader_code_count, shader_code_text);
+
+            // Attempt error recovery: try to continue with degraded functionality
+            // rather than crashing. This allows the viewer to start even if some
+            // shaders fail to compile (e.g., due to driver bugs or GPU issues).
+            LL_WARNS("ShaderLoading") << "Shader compilation failed - will attempt graceful degradation" << LL_ENDL;
+
             glDeleteShader(ret); //no longer need handle
             ret = 0;
+
+            // Note: The caller (LLGLSLShader::createShader) will check if ret == 0
+            // and handle the failure appropriately by either falling back to a
+            // simpler shader or disabling the feature that requires this shader.
         }
     }
     else
     {
+        LL_WARNS("ShaderLoading") << "GL error " << error << " during shader compilation for: " << open_file_name << LL_ENDL;
         ret = 0;
     }
     stop_glerror();

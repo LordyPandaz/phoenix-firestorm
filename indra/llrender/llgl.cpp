@@ -1218,6 +1218,11 @@ bool LLGLManager::initGL()
     {
         mGLVendorShort = "NVIDIA";
         mIsNVIDIA = true;
+
+        // Parse actual NVIDIA driver version from vendor string
+        // Note: mDriverVersionMajor contains OpenGL version (4, 5, 6), not driver version
+        parse_nvidia_driver_version(mNvidiaDriverVersionMajor, mNvidiaDriverVersionMinor, mDriverVersionVendorString);
+        LL_INFOS("RenderInit") << "NVIDIA Driver Version: " << mNvidiaDriverVersionMajor << "." << mNvidiaDriverVersionMinor << LL_ENDL;
     }
     else if (mGLVendor.find("INTEL") != std::string::npos
 #if LL_LINUX
@@ -3011,6 +3016,67 @@ void parse_glsl_version(S32& major, S32& minor)
     }
     std::string minor_str = ver_copy.substr(start,i-start);
     LLStringUtil::convertToS32(minor_str, minor);
+}
+
+void parse_nvidia_driver_version(S32& major, S32& minor, const std::string& vendor_string)
+{
+    // NVIDIA vendor string format: "NVIDIA XXX.YY.ZZ" where XXX is the driver version
+    // Example: "NVIDIA 555.58.02" or "4.6.0 NVIDIA 555.58.02"
+    major = 0;
+    minor = 0;
+
+    if (vendor_string.empty())
+    {
+        return;
+    }
+
+    // Find "NVIDIA " in the string
+    size_t nvidia_pos = vendor_string.find("NVIDIA ");
+    if (nvidia_pos == std::string::npos)
+    {
+        return;
+    }
+
+    // Skip past "NVIDIA "
+    size_t version_start = nvidia_pos + 7; // strlen("NVIDIA ")
+    if (version_start >= vendor_string.length())
+    {
+        return;
+    }
+
+    // Extract the version number substring
+    size_t i = version_start;
+    size_t len = vendor_string.length();
+
+    // Find the major version (digits before first dot)
+    size_t major_start = i;
+    while (i < len && isdigit(vendor_string[i]))
+    {
+        i++;
+    }
+
+    if (i > major_start)
+    {
+        std::string major_str = vendor_string.substr(major_start, i - major_start);
+        LLStringUtil::convertToS32(major_str, major);
+    }
+
+    // Find the minor version if there's a dot
+    if (i < len && vendor_string[i] == '.')
+    {
+        i++; // Skip the dot
+        size_t minor_start = i;
+        while (i < len && isdigit(vendor_string[i]))
+        {
+            i++;
+        }
+
+        if (i > minor_start)
+        {
+            std::string minor_str = vendor_string.substr(minor_start, i - minor_start);
+            LLStringUtil::convertToS32(minor_str, minor);
+        }
+    }
 }
 
 LLGLUserClipPlane::LLGLUserClipPlane(const LLPlane& p, const glm::mat4& modelview, const glm::mat4& projection, bool apply)
