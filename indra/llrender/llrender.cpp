@@ -517,19 +517,24 @@ void LLTexUnit::setTextureFilteringOption(LLTexUnit::eTextureFilterOptions optio
         {
             // Enhanced anisotropic filtering with quality-performance balance
             F32 aniso_level = gGLManager.mMaxAnisotropy;
-            
-            // Apply performance optimization based on texture type
+
+            // Apply performance optimization based on texture type and GPU vendor
             if (mCurrTexType == TT_CUBE_MAP || mCurrTexType == TT_CUBE_MAP_ARRAY)
             {
-                // Reduce anisotropy for cube maps to improve performance
-                aniso_level = llmin(aniso_level, 8.0f);
+                // NVIDIA handles full aniso well on cube maps
+                // Reduce only on AMD/Intel for performance
+                if (!gGLManager.mIsNVIDIA)
+                {
+                    aniso_level = llmin(aniso_level, 8.0f);
+                }
             }
             else if (mCurrTexType == TT_TEXTURE_3D)
             {
                 // 3D textures benefit less from anisotropy, use moderate level
+                // (all vendors - limited benefit for 3D sampling patterns)
                 aniso_level = llmin(aniso_level, 4.0f);
             }
-            
+
             glTexParameterf(sGLTextureType[mCurrTexType], GL_TEXTURE_MAX_ANISOTROPY, aniso_level);
         }
         else if (option == TFO_TRILINEAR)
