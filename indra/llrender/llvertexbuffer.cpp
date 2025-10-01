@@ -273,18 +273,32 @@ static GLuint gen_buffer()
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_VERTEX("gen buffer");
         sIndex = pool_size;
-#if !LL_DARWIN
-        if (!gGLManager.mIsAMD)
+
+        // Legacy workaround for ancient AMD driver bug with batch buffer generation
+        // Modern AMD drivers (2018+) handle batch operations correctly
+        // Use LL_AMD_BUFFER_WORKAROUND=1 to re-enable if needed on old hardware
+        static bool use_amd_workaround = []() {
+            const char* env = getenv("LL_AMD_BUFFER_WORKAROUND");
+            bool workaround = (env != nullptr && atoi(env) != 0);
+            if (workaround && gGLManager.mIsAMD)
+            {
+                LL_INFOS("RenderInit") << "AMD buffer generation workaround enabled via LL_AMD_BUFFER_WORKAROUND" << LL_ENDL;
+            }
+            return workaround;
+        }();
+
+        if (gGLManager.mIsAMD && use_amd_workaround)
         {
-            glGenBuffers(pool_size, sNamePool);
-        }
-        else
-#endif
-        { // work around for AMD driver bug
+            // Legacy one-at-a-time generation for ancient AMD drivers
             for (U32 i = 0; i < pool_size; ++i)
             {
                 glGenBuffers(1, sNamePool + i);
             }
+        }
+        else
+        {
+            // Modern batch generation (all vendors including AMD)
+            glGenBuffers(pool_size, sNamePool);
         }
     }
 
