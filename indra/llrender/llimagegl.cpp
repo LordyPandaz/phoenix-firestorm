@@ -1732,8 +1732,34 @@ bool LLImageGL::createGLTexture(S32 discard_level, const U8* data_in, bool data_
         }
     }
 
+    // Track texture memory changes for memory pressure system
+    S64Bytes old_texture_memory = mTextureMemory;
+    S64Bytes new_texture_memory = (S64Bytes)getMipBytes(mCurrentDiscardLevel);
 
-    mTextureMemory = (S64Bytes)getMipBytes(mCurrentDiscardLevel);
+    // Release old texture memory from global tracking
+    if (old_texture_memory.value() > 0)
+    {
+        U32 old_mb = (U32)(old_texture_memory.value() / (1024 * 1024));
+        if (old_mb > 0)
+        {
+            gGLManager.releaseTextureMemory(old_mb);
+        }
+    }
+
+    // Update local texture memory
+    mTextureMemory = new_texture_memory;
+
+    // Request new texture memory from global tracking
+    if (new_texture_memory.value() > 0)
+    {
+        U32 new_mb = (U32)(new_texture_memory.value() / (1024 * 1024));
+        if (new_mb > 0)
+        {
+            // Note: requestTextureMemory returns false if budget exceeded,
+            // but we proceed anyway since texture is already allocated in VRAM
+            gGLManager.requestTextureMemory(new_mb);
+        }
+    }
 
     // mark this as bound at this point, so we don't throw it out immediately
     mLastBindTime = sLastFrameTime;
@@ -1965,8 +1991,14 @@ void LLImageGL::destroyGLTexture()
 
     if (mTexName != 0)
     {
+        // Release texture memory from global tracking before destroying
         if(mTextureMemory != S64Bytes(0))
         {
+            U32 mb = (U32)(mTextureMemory.value() / (1024 * 1024));
+            if (mb > 0)
+            {
+                gGLManager.releaseTextureMemory(mb);
+            }
             mTextureMemory = (S64Bytes)0;
         }
 
