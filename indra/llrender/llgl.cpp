@@ -195,6 +195,7 @@ void APIENTRY gl_debug_callback(GLenum source,
 #endif
 
 void parse_glsl_version(S32& major, S32& minor);
+void parse_nvidia_driver_version(S32& major, S32& minor, const std::string& vendor_string);
 
 void ll_init_fail_log(std::string filename)
 {
