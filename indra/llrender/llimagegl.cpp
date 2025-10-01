@@ -2338,16 +2338,35 @@ void LLImageGL::freePickMask()
 bool LLImageGL::isCompressed()
 {
     llassert(mFormatPrimary != 0);
-    // *NOTE: Not all compressed formats are included here.
+
     bool is_compressed = false;
     switch (mFormatPrimary)
     {
+    // S3TC/DXT formats
     case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT:
     case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT:
     case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+
+    // RGTC formats (GL_EXT_texture_compression_rgtc)
+    case GL_COMPRESSED_RED_RGTC1:
+    case GL_COMPRESSED_SIGNED_RED_RGTC1:
+    case GL_COMPRESSED_RG_RGTC2:
+    case GL_COMPRESSED_SIGNED_RG_RGTC2:
+
+    // BPTC formats (GL_ARB_texture_compression_bptc)
+    case GL_COMPRESSED_RGBA_BPTC_UNORM:
+    case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+    case GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT:
+    case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
+
+    // Generic compressed formats
+    case GL_COMPRESSED_RGB:
+    case GL_COMPRESSED_RGBA:
+    case GL_COMPRESSED_SRGB:
+    case GL_COMPRESSED_SRGB_ALPHA:
         is_compressed = true;
         break;
     default:
