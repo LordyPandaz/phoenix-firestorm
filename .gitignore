@@ -134,3 +134,7 @@ checks.json
 
 # Personal autobuild configuration (contains local paths)
 autobuild.xml
+
+# Claude Code artifacts
+claudedocs/
+.serena/
