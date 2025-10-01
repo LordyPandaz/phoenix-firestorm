@@ -32,6 +32,8 @@
 #include <string>
 #include <boost/unordered_map.hpp>
 #include <list>
+#include <mutex>
+#include <atomic>
 
 #include "llerror.h"
 #include "v4color.h"
@@ -142,23 +144,26 @@ public:
 
     U32 mVRAM; // VRAM in MB
     S32 mVRAMDetected; // <FS:Beq/> The amount detected/reported by the OS/Drivers. If different to mVRAM there is an override in place.
-    
-    // Runtime VRAM monitoring
-    U32 mCurrentVRAM = 0; // Currently available VRAM in MB
-    U32 mLastEvictionCount = 0; // Last known eviction count for pressure detection
-    U32 mTextureEvictionCount = 0; // Total texture evictions since startup
-    F64 mLastEvictionCheck = 0.0; // Last time we checked for evictions
-    
+
+    // Runtime VRAM monitoring (atomic for thread safety)
+    std::atomic<U32> mCurrentVRAM{0}; // Currently available VRAM in MB (atomic: accessed from render thread)
+    U32 mLastEvictionCount = 0; // Last known eviction count for pressure detection (protected by mutex)
+    std::atomic<U32> mTextureEvictionCount{0}; // Total texture evictions since startup (atomic: read from multiple threads)
+    std::atomic<F64> mLastEvictionCheck{0.0}; // Last time we checked for evictions (atomic: thread-safe timestamp)
+
     // GPU Memory Pressure Management
-    bool mMemoryPressureDetected = false;
-    F64 mLastMemoryPressureCheck = 0.0;
-    U32 mMemoryPressureLevel = 0; // 0=None, 1=Low, 2=Medium, 3=High, 4=Critical
-    U32 mTextureMemoryBudget = 0; // Dynamic texture memory budget in MB
-    U32 mTextureMemoryUsed = 0; // Current texture memory usage in MB
-    F64 mMemoryPressureThreshold = 0.85; // Trigger pressure handling at 85% usage
-    
+    std::atomic<bool> mMemoryPressureDetected{false}; // Atomic: read from multiple threads
+    std::atomic<F64> mLastMemoryPressureCheck{0.0}; // Atomic: thread-safe timestamp
+    U32 mMemoryPressureLevel = 0; // 0=None, 1=Low, 2=Medium, 3=High, 4=Critical (protected by mutex)
+    U32 mTextureMemoryBudget = 0; // Dynamic texture memory budget in MB (protected by mutex)
+    U32 mOriginalTextureMemoryBudget = 0; // Original budget before emergency reductions (protected by mutex)
+    F64 mLastBudgetReductionTime = 0.0; // Time of last budget reduction (protected by mutex)
+    std::atomic<U32> mTextureMemoryUsed{0}; // Current texture memory usage in MB (atomic for thread safety)
+    F64 mMemoryPressureThreshold = 0.85; // Trigger pressure handling at 85% usage (const-like, no protection needed)
+    mutable std::recursive_mutex mMemoryPressureMutex; // Thread safety for memory tracking (recursive to prevent deadlock)
+
     // Context loss detection
-    bool mContextLost = false;
+    std::atomic<bool> mContextLost{false}; // Atomic: can be checked from multiple threads
     std::string getGLInfoString();
     void printGLInfoString();
     void getGLInfo(LLSD& info);
@@ -202,7 +207,10 @@ public:
     void initializeMemoryPressureSystem();
     void updateMemoryPressure();
     bool isMemoryPressureDetected() const { return mMemoryPressureDetected; }
-    U32 getMemoryPressureLevel() const { return mMemoryPressureLevel; }
+    U32 getMemoryPressureLevel() const {
+        std::lock_guard<std::recursive_mutex> lock(mMemoryPressureMutex);
+        return mMemoryPressureLevel;
+    }
     void handleMemoryPressure(U32 level);
     bool requestTextureMemory(U32 size_mb);
     void releaseTextureMemory(U32 size_mb);

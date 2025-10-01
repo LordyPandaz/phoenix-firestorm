@@ -60,6 +60,7 @@ extern "C" {
 # include <sys/types.h>
 # include <sys/wait.h>
 # include <stdio.h>
+# include <time.h>  // for nanosleep()
 #endif // LL_LINUX
 
 extern bool gDebugWindowProc;
@@ -418,6 +419,9 @@ LLWindowSDL::LLWindowSDL(LLWindowCallbacks* callbacks,
     mCurrentSwapInterval = 0;
     mLastVerifiedSwapInterval = 0;
     mLastVSyncVerifyTime = 0.0;
+    mInVSyncRecovery = false;
+    mVSyncRecoveryAttempts = 0;
+    mLastRecoveryAttemptTime = 0.0;
     
     // Initialize Frame Pacing System
     initializeFramePacing();
@@ -2788,7 +2792,10 @@ void* LLWindowSDL::createSharedContext()
     sc->mContext = SDL_GL_CreateContext(mWindow);
     if (sc->mContext)
     {
-        SDL_GL_SetSwapInterval(0);
+        // CRITICAL FIX: Do NOT call SDL_GL_SetSwapInterval here!
+        // Shared contexts are for background threads and don't present to screen.
+        // Setting swap interval while shared context is current can corrupt main context VSync.
+        // This was causing FIRE-32559: VSync randomly stops working.
         SDL_GL_MakeCurrent(mWindow, mContext);
 
         LLCoordScreen size;
@@ -2959,20 +2966,48 @@ bool LLWindowSDL::verifyVSyncState(bool expected_state)
     
     if (!state_matches || interval_corrupted)
     {
-        LL_WARNS() << "VSync verification failed! Expected state: " << expected_state 
-                   << ", Actual interval: " << actual_interval 
-                   << ", Stored interval: " << mCurrentSwapInterval << LL_ENDL;
-        
+        // Check if we've had too many recent recovery attempts (safety timeout)
+        const U32 MAX_RECOVERY_ATTEMPTS = 5;
+        const F64 RECOVERY_TIMEOUT = 30.0; // Reset counter after 30 seconds of stability
+
+        if (current_time - mLastRecoveryAttemptTime > RECOVERY_TIMEOUT)
+        {
+            mVSyncRecoveryAttempts = 0; // Reset counter after timeout period
+        }
+
+        if (mVSyncRecoveryAttempts >= MAX_RECOVERY_ATTEMPTS)
+        {
+            LL_WARNS() << "VSync recovery attempt limit reached (" << MAX_RECOVERY_ATTEMPTS
+                       << " attempts in " << RECOVERY_TIMEOUT << " seconds). "
+                       << "Skipping recovery to prevent infinite loop. Consider disabling VSync." << LL_ENDL;
+            return false;
+        }
+
+        LL_WARNS() << "VSync verification failed! Expected state: " << expected_state
+                   << ", Actual interval: " << actual_interval
+                   << ", Stored interval: " << mCurrentSwapInterval
+                   << " (Attempt " << (mVSyncRecoveryAttempts + 1) << "/" << MAX_RECOVERY_ATTEMPTS << ")" << LL_ENDL;
+
+        // Track recovery attempt
+        mVSyncRecoveryAttempts++;
+        mLastRecoveryAttemptTime = current_time;
+
         // Attempt recovery
         forceVSyncRecovery();
-        
+
         // Re-check after recovery
         int recovered_interval = SDL_GL_GetSwapInterval();
-        LL_INFOS() << "VSync recovery result: interval changed from " << actual_interval 
+        LL_INFOS() << "VSync recovery result: interval changed from " << actual_interval
                    << " to " << recovered_interval << LL_ENDL;
-        
-        state_matches = expected_state ? (recovered_interval == 1 || recovered_interval == -1) 
+
+        state_matches = expected_state ? (recovered_interval == 1 || recovered_interval == -1)
                                        : (recovered_interval == 0);
+
+        // Reset counter on successful recovery
+        if (state_matches)
+        {
+            mVSyncRecoveryAttempts = 0;
+        }
     }
     else if (actual_interval != mLastVerifiedSwapInterval)
     {
@@ -2986,10 +3021,18 @@ bool LLWindowSDL::verifyVSyncState(bool expected_state)
 
 void LLWindowSDL::forceVSyncRecovery()
 {
+    // Guard against infinite recursion
+    if (mInVSyncRecovery)
+    {
+        LL_WARNS() << "Already in VSync recovery, preventing recursion" << LL_ENDL;
+        return;
+    }
+    mInVSyncRecovery = true;
+
     int corrupted_interval = SDL_GL_GetSwapInterval();
-    LL_INFOS() << "Forcing VSync recovery - corrupted interval: " << corrupted_interval 
+    LL_INFOS() << "Forcing VSync recovery - corrupted interval: " << corrupted_interval
                << ", target state: " << mVSyncEnabled << LL_ENDL;
-    
+
     // Store current state and force re-application
     bool current_state = mVSyncEnabled;
     
@@ -3006,7 +3049,10 @@ void LLWindowSDL::forceVSyncRecovery()
     
     // Small delay to ensure state change is processed
     #ifdef LL_LINUX
-    usleep(2000); // 2ms delay for stability
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 2000000; // 2ms (2,000,000 nanoseconds)
+    nanosleep(&ts, nullptr); // More portable than usleep
     #endif
     
     // Re-enable if it was supposed to be enabled with retry logic
@@ -3021,7 +3067,10 @@ void LLWindowSDL::forceVSyncRecovery()
             {
                 LL_INFOS() << "VSync recovery attempt " << (retry + 1) << " of " << MAX_RETRIES << LL_ENDL;
                 #ifdef LL_LINUX
-                usleep(1000); // Additional delay between retries
+                struct timespec ts;
+                ts.tv_sec = 0;
+                ts.tv_nsec = 1000000; // 1ms (1,000,000 nanoseconds)
+                nanosleep(&ts, nullptr); // More portable than usleep
                 #endif
             }
             
@@ -3049,6 +3098,8 @@ void LLWindowSDL::forceVSyncRecovery()
                        << "Performance may be degraded. Consider disabling VSync." << LL_ENDL;
         }
     }
+
+    mInVSyncRecovery = false;  // Clear recursion guard
 }
 
 bool LLWindowSDL::isVSyncSupported()
@@ -3173,19 +3224,31 @@ void LLWindowSDL::updateFramePacing()
 {
     if (!mFramePacingEnabled)
         return;
-        
+
     F64 current_time = LLTimer::getElapsedSeconds();
     F64 frame_time = current_time - mLastFrameTime;
-    
+
+    // Sanity check: Reject absurd frame times
+    const F64 MIN_SANE_FRAME_TIME = 0.001;  // 1ms = 1000 FPS (unrealistic but safe)
+    const F64 MAX_SANE_FRAME_TIME = 1.0;    // 1 second = 1 FPS (frozen/paused)
+
+    if (frame_time < MIN_SANE_FRAME_TIME || frame_time > MAX_SANE_FRAME_TIME)
+    {
+        LL_WARNS("FramePacing") << "Insane frame time detected: " << (frame_time * 1000.0) << "ms. "
+                                << "Skipping frame pacing update." << LL_ENDL;
+        mLastFrameTime = current_time; // Update time but skip pacing adjustments
+        return;
+    }
+
     recordFrameTime(frame_time);
-    
+
     // Adaptive frame time adjustment every 60 frames or every 2 seconds
     if (mFrameCount % 60 == 0 || (current_time - mLastPacingAdjustment) > 2.0)
     {
         adjustTargetFrameTime();
         mLastPacingAdjustment = current_time;
     }
-    
+
     // Handle multi-monitor VSync synchronization
     synchronizeMultiMonitorVSync();
 }
@@ -3291,17 +3354,34 @@ void LLWindowSDL::adjustTargetFrameTime()
 {
     if (!mAdaptivePacingEnabled)
         return;
-        
+
+    // Sanity check: Validate min/max frame times
+    const F64 ABSOLUTE_MIN_FRAME_TIME = 0.002;  // 2ms = 500 FPS absolute max
+    const F64 ABSOLUTE_MAX_FRAME_TIME = 0.1;    // 100ms = 10 FPS absolute min
+
+    if (mMinFrameTime < ABSOLUTE_MIN_FRAME_TIME || mMaxFrameTime > ABSOLUTE_MAX_FRAME_TIME ||
+        mMinFrameTime >= mMaxFrameTime)
+    {
+        LL_WARNS("FramePacing") << "Invalid min/max frame time bounds detected. "
+                                << "Min: " << (mMinFrameTime * 1000.0) << "ms, "
+                                << "Max: " << (mMaxFrameTime * 1000.0) << "ms. "
+                                << "Resetting to safe defaults." << LL_ENDL;
+        mMinFrameTime = 1.0 / 240.0;  // 240 FPS max
+        mMaxFrameTime = 1.0 / 30.0;   // 30 FPS min
+    }
+
     F64 stability_threshold = 0.001; // 1ms variance threshold
-    
+
+    F64 old_target = mTargetFrameTime;
+
     // If we're consistently running fast and the system is stable
     if (mConsecutiveFastFrames > 30 && mFrameVariance < stability_threshold)
     {
         // Increase target frame rate slightly (reduce frame time)
         mTargetFrameTime *= 0.95;
         mTargetFrameTime = llmax(mTargetFrameTime, mMinFrameTime);
-        
-        LL_DEBUGS("Window") << "Frame pacing: Increased target FPS to " 
+
+        LL_DEBUGS("Window") << "Frame pacing: Increased target FPS to "
                            << (int)(1.0 / mTargetFrameTime) << LL_ENDL;
     }
     // If we're consistently running slow
@@ -3310,11 +3390,20 @@ void LLWindowSDL::adjustTargetFrameTime()
         // Decrease target frame rate (increase frame time)
         mTargetFrameTime *= 1.05;
         mTargetFrameTime = llmin(mTargetFrameTime, mMaxFrameTime);
-        
-        LL_DEBUGS("Window") << "Frame pacing: Decreased target FPS to " 
+
+        LL_DEBUGS("Window") << "Frame pacing: Decreased target FPS to "
                            << (int)(1.0 / mTargetFrameTime) << LL_ENDL;
     }
-    
+
+    // Final sanity check after adjustment
+    if (mTargetFrameTime < ABSOLUTE_MIN_FRAME_TIME || mTargetFrameTime > ABSOLUTE_MAX_FRAME_TIME)
+    {
+        LL_WARNS("FramePacing") << "Target frame time adjusted to insane value: "
+                                << (mTargetFrameTime * 1000.0) << "ms. "
+                                << "Reverting to previous value." << LL_ENDL;
+        mTargetFrameTime = old_target;
+    }
+
     // Reset counters after adjustment
     mConsecutiveFastFrames = 0;
     mConsecutiveSlowFrames = 0;
@@ -3365,20 +3454,39 @@ void LLWindowSDL::detectMonitorConfiguration()
     for (int i = 0; i < num_displays; i++)
     {
         SDL_DisplayMode current_mode;
+        S32 refresh_rate = 60; // Default fallback
+
         if (SDL_GetCurrentDisplayMode(i, &current_mode) == 0)
         {
-            mMonitorRefreshRates.push_back(current_mode.refresh_rate);
-            
-            LL_DEBUGS("MultiMonitor") << "Display " << i << ": " 
-                                     << current_mode.w << "x" << current_mode.h 
-                                     << " @ " << current_mode.refresh_rate << "Hz" << LL_ENDL;
+            // Validate refresh rate is within sane bounds
+            // Min: 24Hz (below this is likely a reporting error)
+            // Max: 500Hz (no consumer displays exceed this currently)
+            const S32 MIN_VALID_REFRESH = 24;
+            const S32 MAX_VALID_REFRESH = 500;
+
+            if (current_mode.refresh_rate >= MIN_VALID_REFRESH &&
+                current_mode.refresh_rate <= MAX_VALID_REFRESH)
+            {
+                refresh_rate = current_mode.refresh_rate;
+                LL_DEBUGS("MultiMonitor") << "Display " << i << ": "
+                                         << current_mode.w << "x" << current_mode.h
+                                         << " @ " << current_mode.refresh_rate << "Hz" << LL_ENDL;
+            }
+            else
+            {
+                // Invalid refresh rate reported by SDL
+                LL_WARNS("MultiMonitor") << "Display " << i << " reported invalid refresh rate: "
+                                        << current_mode.refresh_rate << "Hz. Using 60Hz fallback." << LL_ENDL;
+            }
         }
         else
         {
-            // Default to 60Hz if we can't get refresh rate
-            mMonitorRefreshRates.push_back(60);
-            LL_WARNS("MultiMonitor") << "Failed to get display mode for display " << i << ", assuming 60Hz" << LL_ENDL;
+            // Failed to get display mode
+            LL_WARNS("MultiMonitor") << "Failed to get display mode for display " << i
+                                    << ", using 60Hz fallback" << LL_ENDL;
         }
+
+        mMonitorRefreshRates.push_back(refresh_rate);
     }
 }
 

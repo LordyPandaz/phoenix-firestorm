@@ -38,6 +38,7 @@
 #include "llgl.h"
 #include "llglstates.h"
 #include "llrender.h"
+#include "llmd5.h"
 
 #include "llerror.h"
 #include "llerrorcontrol.h"
@@ -75,6 +76,9 @@
 #define GLH_EXT_GET_PROC_ADDRESS SDL_GL_GetProcAddress
 #define ExtensionExists(exten, unused) SDL_GL_ExtensionSupported(exten);
 #endif
+
+// Thread safety support
+extern LL_COMMON_API bool on_main_thread();
 
 #ifdef _DEBUG
 //#define GL_STATE_VERIFY
@@ -1356,7 +1360,56 @@ bool LLGLManager::initGL()
             }
         }
 
-        // Additional fallback for very old Nvidia drivers
+        // AMD-specific VRAM detection methods
+        if (mIsAMD && mVRAM == 0)
+        {
+            // Try AMD sysfs interface (modern amdgpu driver)
+            FILE* amd_vram = fopen("/sys/class/drm/card0/device/mem_info_vram_total", "r");
+            if (amd_vram)
+            {
+                char vram_str[64];
+                if (fgets(vram_str, sizeof(vram_str), amd_vram))
+                {
+                    S64 vram_bytes = atoll(vram_str);
+                    if (vram_bytes > 0)
+                    {
+                        mVRAM = (U32)(vram_bytes / (1024 * 1024)); // Convert bytes to MB
+                        LL_INFOS("RenderInit") << "VRAM Detected (AMD sysfs): " << mVRAM << " MB" << LL_ENDL;
+                    }
+                }
+                fclose(amd_vram);
+            }
+
+            // Fallback: Try legacy radeon driver sysfs
+            if (mVRAM == 0)
+            {
+                FILE* radeon_vram = fopen("/sys/kernel/debug/dri/0/radeon_vram_mm", "r");
+                if (radeon_vram)
+                {
+                    char line[256];
+                    while (fgets(line, sizeof(line), radeon_vram))
+                    {
+                        if (strstr(line, "size"))
+                        {
+                            char* size_str = strstr(line, "size");
+                            if (size_str)
+                            {
+                                S32 vram_mb = atoi(size_str + 4);
+                                if (vram_mb > 0)
+                                {
+                                    mVRAM = vram_mb;
+                                    LL_INFOS("RenderInit") << "VRAM Detected (Radeon debugfs): " << mVRAM << " MB" << LL_ENDL;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    fclose(radeon_vram);
+                }
+            }
+        }
+
+        // Additional fallback for very old Nvidia/AMD drivers
         if (mVRAM == 0)
         {
             // Conservative system memory estimation for ancient drivers
@@ -3318,41 +3371,69 @@ bool check_framebuffer_status_safe()
 {
     // Safe framebuffer completeness check with recovery
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    
+    bool recoverable = false;
+
     if (status == GL_FRAMEBUFFER_COMPLETE)
     {
         return true;
     }
-    
+
+    // Enhanced error reporting with troubleshooting hints
     LL_WARNS("RenderState") << "Framebuffer incomplete: ";
+
     switch (status)
     {
         case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
-            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT";
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT (attachment parameters invalid)";
+            recoverable = true; // Can try rebinding attachments
             break;
         case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
-            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT (no images attached)";
+            recoverable = false; // Cannot recover without proper setup
             break;
         case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
-            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER";
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER (draw buffer mismatch)";
+            recoverable = true;
             break;
         case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
-            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER (read buffer mismatch)";
+            recoverable = true;
             break;
         case GL_FRAMEBUFFER_UNSUPPORTED:
-            LL_CONT << "GL_FRAMEBUFFER_UNSUPPORTED";
+            LL_CONT << "GL_FRAMEBUFFER_UNSUPPORTED (format combination unsupported by driver)";
+            recoverable = false; // Hardware limitation
             break;
         case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
-            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE (multisample parameters invalid)";
+            recoverable = true;
+            break;
+        case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS:
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS (layered attachment mismatch)";
+            recoverable = true;
             break;
         default:
             LL_CONT << "Unknown status " << std::hex << status << std::dec;
+            recoverable = false;
             break;
     }
-    LL_CONT << LL_ENDL;
-    
-    // Attempt recovery by binding default framebuffer
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    LL_CONT << (recoverable ? " - attempting recovery" : " - unrecoverable") << LL_ENDL;
+
+    // Enhanced recovery strategy
+    if (recoverable)
+    {
+        // Try to recover by binding default framebuffer and clearing errors
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glGetError(); // Clear any pending errors
+
+        LL_INFOS("RenderState") << "Framebuffer error recovery: bound to default framebuffer (0)" << LL_ENDL;
+    }
+    else
+    {
+        // For unrecoverable errors, bind default and log critical warning
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        LL_WARNS("RenderState") << "Framebuffer error is unrecoverable - feature may be disabled" << LL_ENDL;
+    }
+
     return false;
 }
 
@@ -3427,20 +3508,21 @@ void LLGLManager::initializeMemoryPressureSystem()
     if (!mHasRequirements)
     {
         LL_WARNS("GPUMemory") << "OpenGL requirements not met, cannot initialize memory pressure system" << LL_ENDL;
-        mMemoryPressureDetected = false;
+        mMemoryPressureDetected.store(false);
         return;
     }
-    
+
     // Initialize memory pressure system
-    mMemoryPressureDetected = false;
-    mLastMemoryPressureCheck = LLTimer::getElapsedSeconds();
+    mMemoryPressureDetected.store(false);
+    F64 current_time = LLTimer::getElapsedSeconds();
+    mLastMemoryPressureCheck.store(current_time);
     mMemoryPressureLevel = 0;
-    
+
     // Validate timer system is working
-    if (mLastMemoryPressureCheck <= 0.0)
+    if (current_time <= 0.0)
     {
         LL_WARNS("GPUMemory") << "Timer system not available, using fallback timing" << LL_ENDL;
-        mLastMemoryPressureCheck = 1.0; // Fallback value
+        mLastMemoryPressureCheck.store(1.0); // Fallback value
     }
     
     // Set initial texture memory budget based on total VRAM
@@ -3448,11 +3530,11 @@ void LLGLManager::initializeMemoryPressureSystem()
     {
         // Use 75% of total VRAM for texture budget, leaving 25% for other GPU operations
         mTextureMemoryBudget = (U32)(mVRAM * 0.75f);
-        
+
         // Ensure minimum budget of 128MB and maximum of 12GB
         mTextureMemoryBudget = llclamp(mTextureMemoryBudget, 128U, 12288U);
-        
-        LL_INFOS("GPUMemory") << "GPU Memory Pressure System initialized - Budget: " 
+
+        LL_INFOS("GPUMemory") << "GPU Memory Pressure System initialized - Budget: "
                               << mTextureMemoryBudget << " MB of " << mVRAM << " MB total VRAM" << LL_ENDL;
     }
     else
@@ -3461,33 +3543,41 @@ void LLGLManager::initializeMemoryPressureSystem()
         mTextureMemoryBudget = 512; // 512 MB default budget
         LL_WARNS("GPUMemory") << "VRAM detection failed - using conservative 512 MB texture budget" << LL_ENDL;
     }
+
+    // Save original budget for restoration after emergency reductions
+    mOriginalTextureMemoryBudget = mTextureMemoryBudget;
+    mLastBudgetReductionTime = 0.0;
     
-    mTextureMemoryUsed = 0;
+    mTextureMemoryUsed.store(0);
     mMemoryPressureThreshold = 0.85; // 85% threshold
 }
 
 void LLGLManager::updateMemoryPressure()
 {
+    // Thread-safe wrapper - uses recursive mutex to prevent deadlock when called from requestTextureMemory()
+    std::lock_guard<std::recursive_mutex> lock(mMemoryPressureMutex);
+
     F64 current_time = LLTimer::getElapsedSeconds();
-    
+
     // Check memory pressure every 2 seconds to avoid performance impact
-    if (current_time - mLastMemoryPressureCheck < 2.0)
+    F64 last_check = mLastMemoryPressureCheck.load();
+    if (current_time - last_check < 2.0)
         return;
-        
-    mLastMemoryPressureCheck = current_time;
-    
+
+    mLastMemoryPressureCheck.store(current_time);
+
     // Update current VRAM stats
     updateVRAMStats();
-    
+
     // Calculate memory pressure level based on multiple factors
     U32 old_pressure_level = mMemoryPressureLevel;
     mMemoryPressureLevel = 0;
-    
+
     // Factor 1: Texture memory usage vs budget
     if (mTextureMemoryBudget > 0)
     {
-        F32 texture_usage_ratio = (F32)mTextureMemoryUsed / (F32)mTextureMemoryBudget;
-        
+        F32 texture_usage_ratio = (F32)mTextureMemoryUsed.load() / (F32)mTextureMemoryBudget;
+
         if (texture_usage_ratio > 0.95f)
             mMemoryPressureLevel = llmax(mMemoryPressureLevel, 4U); // Critical
         else if (texture_usage_ratio > 0.90f)
@@ -3497,11 +3587,12 @@ void LLGLManager::updateMemoryPressure()
         else if (texture_usage_ratio > 0.70f)
             mMemoryPressureLevel = llmax(mMemoryPressureLevel, 1U); // Low
     }
-    
+
     // Factor 2: Available VRAM
-    if (mCurrentVRAM > 0 && mVRAM > 0)
+    U32 current_vram = mCurrentVRAM.load();
+    if (current_vram > 0 && mVRAM > 0)
     {
-        F32 available_ratio = (F32)mCurrentVRAM / (F32)mVRAM;
+        F32 available_ratio = (F32)current_vram / (F32)mVRAM;
         
         if (available_ratio < 0.05f)
             mMemoryPressureLevel = llmax(mMemoryPressureLevel, 4U); // Critical
@@ -3519,9 +3610,34 @@ void LLGLManager::updateMemoryPressure()
     {
         mMemoryPressureLevel = llmax(mMemoryPressureLevel, 3U); // High pressure if many evictions
     }
-    
-    mMemoryPressureDetected = (mMemoryPressureLevel > 0);
-    
+
+    mMemoryPressureDetected.store(mMemoryPressureLevel > 0);
+
+    // Budget restoration logic: if memory pressure is low/none AND we previously reduced the budget,
+    // gradually restore it to the original value
+    if (mMemoryPressureLevel == 0 && mTextureMemoryBudget < mOriginalTextureMemoryBudget)
+    {
+        // Wait at least 30 seconds after reduction before starting restoration
+        if (mLastBudgetReductionTime > 0.0 && (current_time - mLastBudgetReductionTime) > 30.0)
+        {
+            // Gradually restore budget by 10% every 2 seconds when pressure is low
+            U32 restoration_amount = (U32)(mOriginalTextureMemoryBudget * 0.1f);
+            mTextureMemoryBudget = llmin(mTextureMemoryBudget + restoration_amount, mOriginalTextureMemoryBudget);
+
+            if (mTextureMemoryBudget >= mOriginalTextureMemoryBudget)
+            {
+                mTextureMemoryBudget = mOriginalTextureMemoryBudget;
+                mLastBudgetReductionTime = 0.0; // Reset restoration tracking
+                LL_INFOS("GPUMemory") << "Memory budget fully restored to " << mTextureMemoryBudget << " MB" << LL_ENDL;
+            }
+            else
+            {
+                LL_DEBUGS("GPUMemory") << "Memory budget partially restored to " << mTextureMemoryBudget
+                                      << " MB (target: " << mOriginalTextureMemoryBudget << " MB)" << LL_ENDL;
+            }
+        }
+    }
+
     // Handle memory pressure if level changed or is critical
     if (mMemoryPressureLevel != old_pressure_level || mMemoryPressureLevel >= 3)
     {
@@ -3541,9 +3657,9 @@ void LLGLManager::handleMemoryPressure(U32 level)
     }
     
     const char* level_names[] = {"None", "Low", "Medium", "High", "Critical"};
-    LL_INFOS("GPUMemory") << "GPU Memory Pressure detected - Level: " << level_names[llmin(level, 4U)] 
-                          << " (Texture: " << mTextureMemoryUsed << "/" << mTextureMemoryBudget << " MB, "
-                          << "Available VRAM: " << mCurrentVRAM << " MB)" << LL_ENDL;
+    LL_INFOS("GPUMemory") << "GPU Memory Pressure detected - Level: " << level_names[llmin(level, 4U)]
+                          << " (Texture: " << mTextureMemoryUsed.load() << "/" << mTextureMemoryBudget << " MB, "
+                          << "Available VRAM: " << mCurrentVRAM.load() << " MB)" << LL_ENDL;
     
     // Prevent too frequent cleanup operations
     bool can_cleanup = (current_time - last_cleanup_time) > 5.0; // Max once per 5 seconds
@@ -3590,74 +3706,97 @@ void LLGLManager::handleMemoryPressure(U32 level)
 
 bool LLGLManager::requestTextureMemory(U32 size_mb)
 {
-    // Check if we have budget for this texture
-    if (mTextureMemoryUsed + size_mb <= mTextureMemoryBudget)
     {
-        mTextureMemoryUsed += size_mb;
-        return true;
+        std::lock_guard<std::recursive_mutex> lock(mMemoryPressureMutex);
+
+        // Check if we have budget for this texture
+        if (mTextureMemoryUsed.load() + size_mb <= mTextureMemoryBudget)
+        {
+            mTextureMemoryUsed.fetch_add(size_mb);
+            return true;
+        }
     }
-    
+
     // If we're over budget, check memory pressure
+    // Safe to call now with recursive_mutex
     updateMemoryPressure();
-    
-    // Allow allocation if memory pressure is low and we're not too far over budget
-    if (mMemoryPressureLevel <= 1 && (mTextureMemoryUsed + size_mb) <= (mTextureMemoryBudget * 1.1f))
+
     {
-        mTextureMemoryUsed += size_mb;
-        return true;
+        std::lock_guard<std::recursive_mutex> lock(mMemoryPressureMutex);
+
+        // Allow allocation if memory pressure is low and we're not too far over budget
+        if (mMemoryPressureLevel <= 1 && (mTextureMemoryUsed.load() + size_mb) <= (mTextureMemoryBudget * 1.1f))
+        {
+            mTextureMemoryUsed.fetch_add(size_mb);
+            return true;
+        }
+
+        // Deny allocation to prevent memory pressure
+        LL_DEBUGS("GPUMemory") << "Texture memory request denied - " << size_mb
+                               << " MB would exceed budget (Used: " << mTextureMemoryUsed.load()
+                               << " MB, Budget: " << mTextureMemoryBudget << " MB)" << LL_ENDL;
+        return false;
     }
-    
-    // Deny allocation to prevent memory pressure
-    LL_DEBUGS("GPUMemory") << "Texture memory request denied - " << size_mb 
-                           << " MB would exceed budget (Used: " << mTextureMemoryUsed 
-                           << " MB, Budget: " << mTextureMemoryBudget << " MB)" << LL_ENDL;
-    return false;
 }
 
 void LLGLManager::releaseTextureMemory(U32 size_mb)
 {
-    if (mTextureMemoryUsed >= size_mb)
+    std::lock_guard<std::recursive_mutex> lock(mMemoryPressureMutex);
+
+    U32 current = mTextureMemoryUsed.load();
+    if (current >= size_mb)
     {
-        mTextureMemoryUsed -= size_mb;
+        mTextureMemoryUsed.fetch_sub(size_mb);
     }
     else
     {
-        mTextureMemoryUsed = 0;
+        mTextureMemoryUsed.store(0);
     }
 }
 
 void LLGLManager::emergencyMemoryCleanup()
 {
     LL_WARNS("GPUMemory") << "Performing emergency GPU memory cleanup" << LL_ENDL;
-    
-    // Drastically reduce texture memory budget for immediate relief
+
+    // Temporarily reduce texture memory budget for immediate relief
+    // This is now a temporary reduction that will be restored when memory pressure subsides
+    U32 old_budget = mTextureMemoryBudget;
     mTextureMemoryBudget = (U32)(mTextureMemoryBudget * 0.6f);
-    
+
+    // Track when we reduced the budget for restoration logic
+    mLastBudgetReductionTime = LLTimer::getElapsedSeconds();
+
     // Force garbage collection of unused textures
     // Note: This would need to be integrated with the texture manager
-    
+
     // Reset texture memory usage tracking to be conservative
-    mTextureMemoryUsed = (U32)(mTextureMemoryUsed * 0.7f);
-    
-    LL_WARNS("GPUMemory") << "Emergency cleanup complete - New budget: " << mTextureMemoryBudget << " MB" << LL_ENDL;
+    U32 current_used = mTextureMemoryUsed.load();
+    mTextureMemoryUsed.store((U32)(current_used * 0.7f));
+
+    LL_WARNS("GPUMemory") << "Emergency cleanup complete - Budget reduced from " << old_budget
+                          << " MB to " << mTextureMemoryBudget << " MB (temporary)" << LL_ENDL;
 }
 
 bool LLGLManager::checkVRAMPressure()
 {
     updateMemoryPressure();
-    return mMemoryPressureDetected;
+    return mMemoryPressureDetected.load();
 }
 
 void LLGLManager::updateVRAMStats()
 {
     // Get current available VRAM using various methods
-    mCurrentVRAM = getCurrentVRAM();
+    mCurrentVRAM.store(getCurrentVRAM());
 }
 
 U32 LLGLManager::getCurrentVRAM()
 {
+    // THREAD SAFETY: OpenGL calls must be made from the render thread only
+    // This function calls glGetIntegerv() which requires valid GL context
+    llassert_always_msg(on_main_thread(), "getCurrentVRAM() called from non-render thread - OpenGL calls require render thread!");
+
     U32 available_vram = 0;
-    
+
 #if LL_LINUX && !LL_MESA_HEADLESS
     // Method 1: Use GL_NVX_gpu_memory_info for Nvidia
     if (mHasNVXGpuMemoryInfo && mIsNVIDIA)
@@ -3697,79 +3836,81 @@ U32 LLGLManager::getCurrentVRAM()
 U32 LLGLManager::getEvictionCount()
 {
     F64 current_time = LLTimer::getElapsedSeconds();
-    
+
     // Check for evictions periodically (every 2 seconds)
-    if (current_time - mLastEvictionCheck > 2.0)
+    F64 last_check = mLastEvictionCheck.load();
+    if (current_time - last_check > 2.0)
     {
-        mLastEvictionCheck = current_time;
-        
+        mLastEvictionCheck.store(current_time);
+
         // Detect potential evictions by monitoring VRAM changes
         U32 current_vram = getCurrentVRAM();
-        
+        U32 prev_vram = mCurrentVRAM.load();
+
         // If VRAM availability dropped significantly, assume texture eviction occurred
-        if (mCurrentVRAM > 0 && current_vram < mCurrentVRAM)
+        if (prev_vram > 0 && current_vram < prev_vram)
         {
-            U32 vram_drop = mCurrentVRAM - current_vram;
-            
+            U32 vram_drop = prev_vram - current_vram;
+
             // If VRAM dropped by more than 64MB, count as eviction event
             if (vram_drop > 64)
             {
                 // Estimate evictions based on VRAM drop (rough heuristic: 1 eviction per 32MB lost)
                 U32 estimated_evictions = vram_drop / 32;
-                mTextureEvictionCount += estimated_evictions;
-                
-                LL_DEBUGS("VRAMEviction") << "Detected texture evictions: " << estimated_evictions 
+                mTextureEvictionCount.fetch_add(estimated_evictions);
+
+                LL_DEBUGS("VRAMEviction") << "Detected texture evictions: " << estimated_evictions
                                          << " (VRAM dropped " << vram_drop << " MB)" << LL_ENDL;
             }
         }
-        
+
         // Update current VRAM for next comparison
-        mCurrentVRAM = current_vram;
-        
+        mCurrentVRAM.store(current_vram);
+
         // Additional eviction detection: high memory pressure indicates likely evictions
-        if (mMemoryPressureDetected && mMemoryPressureLevel >= 3)
+        if (mMemoryPressureDetected.load() && mMemoryPressureLevel >= 3)
         {
             // Count one eviction for high/critical pressure states
-            mTextureEvictionCount++;
-            LL_DEBUGS("VRAMEviction") << "Eviction detected via high memory pressure (level " 
+            mTextureEvictionCount.fetch_add(1);
+            LL_DEBUGS("VRAMEviction") << "Eviction detected via high memory pressure (level "
                                      << mMemoryPressureLevel << ")" << LL_ENDL;
         }
     }
-    
-    return mTextureEvictionCount;
+
+    return mTextureEvictionCount.load();
 }
 
 bool LLGLManager::checkContextLoss()
 {
     // Check for OpenGL context loss
     GLenum error = glGetError();
-    
+
     if (error == GL_CONTEXT_LOST)
     {
-        mContextLost = true;
+        mContextLost.store(true);  // Atomic store - thread-safe flag setting
         LL_WARNS("GPUContext") << "OpenGL context loss detected!" << LL_ENDL;
         return true;
     }
-    
-    return mContextLost;
+
+    return mContextLost.load();  // Atomic load - thread-safe read
 }
 
 void LLGLManager::handleContextLoss()
 {
-    if (!mContextLost)
+    if (!mContextLost.load())  // Atomic load - thread-safe check
         return;
-        
+
     LL_WARNS("GPUContext") << "Handling OpenGL context loss - attempting recovery" << LL_ENDL;
-    
-    // Reset all GPU state tracking
-    mTextureMemoryUsed = 0;
-    mMemoryPressureLevel = 0;
-    mMemoryPressureDetected = false;
-    
+
+    // Reset all GPU state tracking (use atomic stores for thread safety)
+    mTextureMemoryUsed.store(0);
+    mMemoryPressureLevel = 0;  // Protected by mutex in memory pressure functions
+    mMemoryPressureDetected.store(false);  // Atomic store
+
     // Reinitialize memory pressure system
     initializeMemoryPressureSystem();
-    
-    mContextLost = false;
+
+    mContextLost.store(false);  // Atomic store - recovery complete
     LL_INFOS("GPUContext") << "Context loss recovery complete" << LL_ENDL;
 }
 
@@ -3816,77 +3957,73 @@ bool LLGLManager::loadShaderFromCache(const std::string& hash, std::string& vert
 {
     if (!mShaderCacheEnabled || hash.empty())
         return false;
-        
+
     std::string cache_path = getShaderCachePath(hash);
     if (!LLFile::isfile(cache_path))
     {
         mShaderCacheMisses++;
         return false;
     }
-    
-    // Try to load cached shader
-    LLFILE* file = LLFile::fopen(cache_path, "rb");
+
+    // Try to load cached shader with RAII pattern for automatic cleanup
+    std::unique_ptr<LLFILE, decltype(&fclose)> file(LLFile::fopen(cache_path, "rb"), &fclose);
     if (!file)
     {
         mShaderCacheMisses++;
         return false;
     }
-    
+
     // Read header with version and size info
     U32 version;
     U32 vertex_size;
     U32 fragment_size;
-    
-    if (fread(&version, sizeof(U32), 1, file) != 1 ||
-        fread(&vertex_size, sizeof(U32), 1, file) != 1 ||
-        fread(&fragment_size, sizeof(U32), 1, file) != 1)
+
+    if (fread(&version, sizeof(U32), 1, file.get()) != 1 ||
+        fread(&vertex_size, sizeof(U32), 1, file.get()) != 1 ||
+        fread(&fragment_size, sizeof(U32), 1, file.get()) != 1)
     {
-        fclose(file);
         mShaderCacheMisses++;
         return false;
     }
-    
+
     // Check version compatibility (simple check for now)
     if (version != 1 || vertex_size > 1024*1024 || fragment_size > 1024*1024)
     {
-        fclose(file);
         mShaderCacheMisses++;
         // Delete invalid cache file
         LLFile::remove(cache_path);
         return false;
     }
-    
+
     // Read vertex shader source
     if (vertex_size > 0)
     {
         std::vector<char> vertex_buffer(vertex_size + 1);
-        if (fread(vertex_buffer.data(), 1, vertex_size, file) != vertex_size)
+        if (fread(vertex_buffer.data(), 1, vertex_size, file.get()) != vertex_size)
         {
-            fclose(file);
             mShaderCacheMisses++;
             return false;
         }
         vertex_buffer[vertex_size] = 0;
         vertex_source = std::string(vertex_buffer.data());
     }
-    
+
     // Read fragment shader source
     if (fragment_size > 0)
     {
         std::vector<char> fragment_buffer(fragment_size + 1);
-        if (fread(fragment_buffer.data(), 1, fragment_size, file) != fragment_size)
+        if (fread(fragment_buffer.data(), 1, fragment_size, file.get()) != fragment_size)
         {
-            fclose(file);
             mShaderCacheMisses++;
             return false;
         }
         fragment_buffer[fragment_size] = 0;
         fragment_source = std::string(fragment_buffer.data());
     }
-    
-    fclose(file);
+
+    // File automatically closed by unique_ptr destructor
     mShaderCacheHits++;
-    
+
     LL_DEBUGS("ShaderCache") << "Loaded shader from cache: " << hash << LL_ENDL;
     return true;
 }
@@ -3895,74 +4032,69 @@ void LLGLManager::saveShaderToCache(const std::string& hash, const std::string& 
 {
     if (!mShaderCacheEnabled || hash.empty())
         return;
-        
+
     // Check cache size limit
     if (mShaderCacheSize > mMaxShaderCacheSize)
     {
         cleanupShaderCache();
     }
-    
+
     std::string cache_path = getShaderCachePath(hash);
-    LLFILE* file = LLFile::fopen(cache_path, "wb");
+    // Use RAII pattern for automatic file cleanup
+    std::unique_ptr<LLFILE, decltype(&fclose)> file(LLFile::fopen(cache_path, "wb"), &fclose);
     if (!file)
     {
         LL_WARNS("ShaderCache") << "Failed to create cache file: " << cache_path << LL_ENDL;
         return;
     }
-    
+
     // Write header
     U32 version = 1;
     U32 vertex_size = vertex_source.size();
     U32 fragment_size = fragment_source.size();
-    
-    fwrite(&version, sizeof(U32), 1, file);
-    fwrite(&vertex_size, sizeof(U32), 1, file);
-    fwrite(&fragment_size, sizeof(U32), 1, file);
-    
+
+    fwrite(&version, sizeof(U32), 1, file.get());
+    fwrite(&vertex_size, sizeof(U32), 1, file.get());
+    fwrite(&fragment_size, sizeof(U32), 1, file.get());
+
     // Write shader sources
     if (vertex_size > 0)
     {
-        fwrite(vertex_source.c_str(), 1, vertex_size, file);
+        fwrite(vertex_source.c_str(), 1, vertex_size, file.get());
     }
-    
+
     if (fragment_size > 0)
     {
-        fwrite(fragment_source.c_str(), 1, fragment_size, file);
+        fwrite(fragment_source.c_str(), 1, fragment_size, file.get());
     }
-    
-    fclose(file);
-    
+
+    // File automatically closed by unique_ptr destructor
+
     // Update cache size statistics
     U32 file_size = (sizeof(U32) * 3 + vertex_size + fragment_size + 1023) / 1024; // Size in KB
     mShaderCacheSize += file_size;
-    
-    LL_DEBUGS("ShaderCache") << "Saved shader to cache: " << hash 
+
+    LL_DEBUGS("ShaderCache") << "Saved shader to cache: " << hash
                             << " (Size: " << file_size << " KB)" << LL_ENDL;
 }
 
 std::string LLGLManager::generateShaderHash(const std::string& vertex_source, const std::string& fragment_source)
 {
-    // Simple hash generation using content length and checksum
-    // In a production system, you'd want to use something like SHA-256
-    std::string combined = vertex_source + fragment_source;
-    
-    U32 hash = 0;
-    for (char c : combined)
-    {
-        hash = hash * 31 + static_cast<U32>(c);
-    }
-    
-    // Add GL version and extensions to hash for compatibility
-    std::string gl_info = mGLVersionString;
-    for (char c : gl_info)
-    {
-        hash = hash * 31 + static_cast<U32>(c);
-    }
-    
-    // Convert to hex string
-    std::ostringstream oss;
-    oss << std::hex << hash << "_" << combined.length();
-    return oss.str();
+    // Use MD5 for robust 128-bit hash to prevent collisions
+    // Include shader sources and driver version for cache invalidation
+    std::string driver_version = std::to_string(mDriverVersionMajor) + "." +
+                                 std::to_string(mDriverVersionMinor) + "." +
+                                 std::to_string(mDriverVersionRelease);
+    std::string combined = vertex_source + fragment_source + mGLVersionString + driver_version;
+
+    LLMD5 md5;
+    md5.update(combined);
+    md5.finalize();
+
+    char hex[MD5HEX_STR_SIZE];
+    md5.hex_digest(hex);
+
+    return std::string(hex);
 }
 
 void LLGLManager::cleanupShaderCache()
@@ -4009,12 +4141,59 @@ void LLGLManager::validateShaderCache()
 {
     if (!mShaderCacheEnabled)
         return;
-        
+
+    // Check for version file to detect driver/GL version changes
+    std::string version_file = mShaderCacheDir + "/cache_version.txt";
+    std::string driver_version = std::to_string(mDriverVersionMajor) + "." +
+                                 std::to_string(mDriverVersionMinor) + "." +
+                                 std::to_string(mDriverVersionRelease);
+    std::string current_version = mGLVersionString + "|" + driver_version;
+
+    // Read existing version file
+    std::string cached_version;
+    LLFILE* version_fp = LLFile::fopen(version_file, "r");
+    if (version_fp)
+    {
+        char buffer[256];
+        if (fgets(buffer, sizeof(buffer), version_fp))
+        {
+            cached_version = std::string(buffer);
+            // Remove trailing newline
+            if (!cached_version.empty() && cached_version.back() == '\n')
+                cached_version.pop_back();
+        }
+        fclose(version_fp);
+    }
+
+    // Check if version changed - if so, clear cache
+    if (!cached_version.empty() && cached_version != current_version)
+    {
+        LL_INFOS("ShaderCache") << "Driver/GL version changed from '"
+                                << cached_version << "' to '" << current_version
+                                << "' - clearing shader cache" << LL_ENDL;
+
+        // Clear all cache files
+        cleanupShaderCache();
+        mShaderCacheSize = 0;
+    }
+
+    // Write current version to file
+    version_fp = LLFile::fopen(version_file, "w");
+    if (version_fp)
+    {
+        fprintf(version_fp, "%s\n", current_version.c_str());
+        fclose(version_fp);
+    }
+    else
+    {
+        LL_WARNS("ShaderCache") << "Failed to write cache version file: " << version_file << LL_ENDL;
+    }
+
     // Recalculate cache size and validate files
     mShaderCacheSize = 0;
     U32 valid_files = 0;
     U32 invalid_files = 0;
-    
+
     try
     {
         // In a full implementation, you'd scan the cache directory
@@ -4028,9 +4207,9 @@ void LLGLManager::validateShaderCache()
         LL_WARNS("ShaderCache") << "Error validating shader cache" << LL_ENDL;
         mShaderCacheSize = 0;
     }
-    
-    LL_DEBUGS("ShaderCache") << "Cache validation complete. Valid files: " << valid_files 
-                            << ", Invalid: " << invalid_files 
+
+    LL_DEBUGS("ShaderCache") << "Cache validation complete. Valid files: " << valid_files
+                            << ", Invalid: " << invalid_files
                             << ", Total size: " << mShaderCacheSize << " KB" << LL_ENDL;
 }
 
