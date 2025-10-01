@@ -1270,7 +1270,9 @@ void LLImageGL::generateTextures(S32 numTextures, U32 *textures)
 
     if ((U32)numTextures <= name_count)
     {
-        //copy teture names off the end of the pool
+        // Pool has enough names - use them
+        // Assert ensures memcpy is safe (should always be true due to if condition)
+        llassert(name_count >= (U32)numTextures && name_count <= pool_size);
         memcpy(textures, name_pool + name_count - numTextures, sizeof(U32) * numTextures);
         name_count -= numTextures;
     }
