@@ -1685,14 +1685,35 @@ void swap()
     LL_PROFILE_GPU_ZONE("swap");
     
     // Update frame pacing system before swap
+    // Safe cast: if statement only executes when cast succeeds (C++17 pattern)
+    // Frame pacing gracefully disabled if not using SDL2 window
     if (auto* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow()))
     {
         sdl_window->updateFramePacing();
-        
+
         // Check if we should skip this frame to maintain pacing
+        // Note: We still need to swap buffers even when skipping rendering
+        // to maintain VSync timing and prevent timing corruption
         if (sdl_window->shouldSkipFrame())
         {
+            // Skip rendering but still swap to maintain VSync timing
+            if (gDisplaySwapBuffers)
+            {
+                gViewerWindow->getWindow()->swapBuffers();
+                sdl_window->applyFramePacing();
+            }
             return; // Skip rendering this frame
+        }
+    }
+    else
+    {
+        // Window is not SDL2 - frame pacing disabled
+        // This is a valid scenario for non-Linux platforms
+        static bool logged_once = false;
+        if (!logged_once)
+        {
+            LL_DEBUGS("FramePacing") << "Frame pacing unavailable: not using SDL2 window" << LL_ENDL;
+            logged_once = true;
         }
     }
     
@@ -1723,12 +1744,14 @@ void swap()
     if (gDisplaySwapBuffers)
     {
         gViewerWindow->getWindow()->swapBuffers();
-        
+
         // Apply frame pacing after swap
+        // Safe cast: only executes if window is SDL2 (C++17 pattern)
         if (auto* sdl_window = dynamic_cast<LLWindowSDL*>(gViewerWindow->getWindow()))
         {
             sdl_window->applyFramePacing();
         }
+        // Note: Graceful degradation if cast fails - frame pacing simply disabled
     }
     gDisplaySwapBuffers = true;
 }

@@ -6255,21 +6255,21 @@ U32 LLVOAvatar::renderTransparent(bool first_pass)
     U32 num_indices = 0;
     if( isWearingWearableType( LLWearableType::WT_SKIRT ) && (isUIAvatar() || isTextureVisible(TEX_SKIRT_BAKED)) )
     {
-        gGL.flush();
+        // Note: Removed redundant gGL.flush() calls here - flush happens at end of render pass
         LLViewerJoint* skirt_mesh = getViewerJoint(MESH_ID_SKIRT);
         if (skirt_mesh)
         {
             num_indices += skirt_mesh->render(mAdjustedPixelArea, false);
         }
         first_pass = false;
-        gGL.flush();
     }
 
     if (!isSelf() || gAgent.needsRenderHead() || LLPipeline::sShadowRender)
     {
+        // Note: Removed redundant flush for impostor render - not needed here
         if (LLPipeline::sImpostorRender)
         {
-            gGL.flush();
+            // Flush removed - causes unnecessary GPU stall
         }
 
         if (isTextureVisible(TEX_HEAD_BAKED))
@@ -6292,6 +6292,7 @@ U32 LLVOAvatar::renderTransparent(bool first_pass)
         }
         if (LLPipeline::sImpostorRender)
         {
+            // Keep single flush at end of impostor rendering pass for state synchronization
             gGL.flush();
         }
     }
@@ -6370,10 +6371,10 @@ U32 LLVOAvatar::renderImpostor(LLColor4U color, S32 diffuse_channel)
         gGL.vertex3fv((pos+left+up).mV);
         gGL.vertex3fv((pos+left-up).mV);
         gGL.end();
-        gGL.flush();
+        // Note: Removed redundant flush - consolidated to single flush at end
     }
     {
-    gGL.flush();
+    // Note: Removed redundant flush - consolidated to single flush at end
 
     gGL.color4ubv(color.mV);
     gGL.getTexUnit(diffuse_channel)->bind(&mImpostor);

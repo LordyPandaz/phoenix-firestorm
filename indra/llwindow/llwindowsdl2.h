@@ -235,6 +235,9 @@ protected:
     int mCurrentSwapInterval;
     int mLastVerifiedSwapInterval;
     F64 mLastVSyncVerifyTime;
+    bool mInVSyncRecovery;  // Recursion guard
+    U32 mVSyncRecoveryAttempts;  // Count consecutive recovery attempts
+    F64 mLastRecoveryAttemptTime;  // Time of last recovery attempt
     
     // Advanced Frame Pacing System
     bool mFramePacingEnabled;
