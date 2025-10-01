@@ -1537,11 +1537,12 @@ bool LLGLManager::initGL()
     // Detect GSP Firmware (Nvidia)
     detectGSPFirmware();
 
-    // Suppress GL debug messages on Linux to prevent performance degradation
-#ifdef LL_LINUX
+    // Suppress GL debug messages on Linux Release builds to prevent performance degradation
+    // Keep enabled in Debug builds for development
+#if defined(LL_LINUX) && !defined(_DEBUG)
     if (glDebugMessageCallback && mHasDebugOutput)
     {
-        LL_INFOS("RenderInit") << "Disabling OpenGL debug output for Linux performance" << LL_ENDL;
+        LL_INFOS("RenderInit") << "Disabling OpenGL debug output for Linux Release build performance" << LL_ENDL;
         glDebugMessageCallback(NULL, NULL);
         glDisable(GL_DEBUG_OUTPUT);
         glDisable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
