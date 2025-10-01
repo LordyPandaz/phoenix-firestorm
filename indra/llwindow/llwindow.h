@@ -206,6 +206,7 @@ public:
     };
 
     virtual S32 getRefreshRate() { return mRefreshRate; }
+    virtual int getCurrentSwapInterval() { return 0; } // Default: no VSync diagnostic info
 protected:
     LLWindow(LLWindowCallbacks* callbacks, bool fullscreen, U32 flags);
     virtual ~LLWindow();

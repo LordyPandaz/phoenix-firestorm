@@ -413,6 +413,18 @@ LLWindowSDL::LLWindowSDL(LLWindowCallbacks* callbacks,
     mIMEEnabled = false;
     mPreeditor = nullptr;
 
+    // Initialize VSync reliability tracking
+    mVSyncEnabled = enable_vsync;
+    mCurrentSwapInterval = 0;
+    mLastVerifiedSwapInterval = 0;
+    mLastVSyncVerifyTime = 0.0;
+    
+    // Initialize Frame Pacing System
+    initializeFramePacing();
+    
+    // Initialize Multi-Monitor VSync Support
+    initializeMultiMonitorVSync();
+
 #if LL_X11
     mSDL_XWindowID = None;
     mSDL_Display = NULL;
@@ -2037,6 +2049,58 @@ void LLWindowSDL::gatherInput()
                     // which confuses the focus code [SL-24071].
                     mHaveInputFocus = true;
 
+                    // GPU State Recovery after focus regain
+                    // Alt-tab and focus changes can corrupt VSync state and frame pacing timing
+                    int pre_focus_interval = SDL_GL_GetSwapInterval();
+                    LL_INFOS("WindowFocus") << "Window focus regained - performing GPU state recovery. "
+                                           << "Current swap interval: " << pre_focus_interval << LL_ENDL;
+                    
+                    // 1. Verify and recover VSync state (SDL2 may have reset swap interval)
+                    bool expected_vsync_state = mVSyncEnabled;
+                    if (!verifyVSyncState(expected_vsync_state))
+                    {
+                        LL_WARNS("WindowFocus") << "VSync state corrupted after focus change - forcing recovery" << LL_ENDL;
+                        forceVSyncRecovery();
+                    }
+                    
+                    // Log final state after recovery
+                    int post_recovery_interval = SDL_GL_GetSwapInterval();
+                    if (post_recovery_interval != pre_focus_interval)
+                    {
+                        LL_INFOS("WindowFocus") << "Swap interval changed during recovery: " 
+                                               << pre_focus_interval << " → " << post_recovery_interval << LL_ENDL;
+                    }
+                    
+                    // 2. Reset frame pacing system (timing data is stale after focus loss)
+                    if (mFramePacingEnabled)
+                    {
+                        F64 current_time = LLTimer::getElapsedSeconds();
+                        mLastFrameTime = current_time;
+                        mFrameTimeAccumulator = 0.0;
+                        mConsecutiveFastFrames = 0;
+                        mConsecutiveSlowFrames = 0;
+                        mLastPacingAdjustment = current_time;
+                        LL_DEBUGS("WindowFocus") << "Frame pacing timing reset after focus regain" << LL_ENDL;
+                    }
+                    
+                    // 3. Update multi-monitor VSync configuration (window may have moved)
+                    if (mMultiMonitorVSyncEnabled)
+                    {
+                        updateMonitorRefreshRates();
+                        synchronizeMultiMonitorVSync();
+                        LL_DEBUGS("WindowFocus") << "Multi-monitor VSync configuration updated" << LL_ENDL;
+                    }
+                    
+                    // 4. Verify OpenGL context is still valid and states are correct
+                    GLenum gl_error = glGetError();
+                    if (gl_error != GL_NO_ERROR)
+                    {
+                        LL_WARNS("WindowFocus") << "OpenGL error detected after focus regain: 0x" 
+                                               << std::hex << gl_error << std::dec << LL_ENDL;
+                        // Clear any accumulated errors
+                        while (glGetError() != GL_NO_ERROR) { /* clear error queue */ }
+                    }
+
                     mCallbacks->handleFocus(this);
                 }
                 else if( event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ) // <FS:ND> What about SDL_WINDOWEVENT_LEAVE (mouse focus)
@@ -2045,6 +2109,14 @@ void LLWindowSDL::gatherInput()
                     // can send us two unfocus events in a row for example,
                     // which confuses the focus code [SL-24071].
                     mHaveInputFocus = false;
+
+                    // GPU Power Saving during focus loss
+                    // Prepare for potential GPU state changes by SDL2/drivers
+                    LL_DEBUGS("WindowFocus") << "Window focus lost - preparing for potential GPU state changes" << LL_ENDL;
+                    
+                    // Note: We don't disable VSync or frame pacing here as that could cause
+                    // issues when focus is regained. Instead, we just log that focus was lost
+                    // and let the focus regain handler restore proper state.
 
                     mCallbacks->handleFocusLost(this);
                 }
@@ -2055,6 +2127,31 @@ void LLWindowSDL::gatherInput()
                          event.window.event == SDL_WINDOWEVENT_SHOWN )
                 {
                     mIsMinimized = (event.window.event == SDL_WINDOWEVENT_MINIMIZED);
+
+                    // GPU State Recovery after window restore/show
+                    // Minimize/restore can also corrupt GPU state similar to focus changes
+                    if (!mIsMinimized && (event.window.event == SDL_WINDOWEVENT_RESTORED || 
+                                          event.window.event == SDL_WINDOWEVENT_SHOWN))
+                    {
+                        int restore_interval = SDL_GL_GetSwapInterval();
+                        LL_INFOS("WindowFocus") << "Window restored/shown - verifying GPU state. "
+                                               << "Swap interval: " << restore_interval << LL_ENDL;
+                        
+                        // Verify VSync state after window restore
+                        bool expected_vsync_state = mVSyncEnabled;
+                        if (!verifyVSyncState(expected_vsync_state))
+                        {
+                            LL_WARNS("WindowFocus") << "VSync state corrupted after restore - forcing recovery" << LL_ENDL;
+                            forceVSyncRecovery();
+                        }
+                        
+                        // Reset frame pacing timing after restore
+                        if (mFramePacingEnabled)
+                        {
+                            mLastFrameTime = LLTimer::getElapsedSeconds();
+                            mFrameTimeAccumulator = 0.0;
+                        }
+                    }
 
                     mCallbacks->handleActivate(this, !mIsMinimized);
                     LL_INFOS() << "SDL deiconification state switched to " << mIsMinimized << LL_ENDL;
@@ -2262,8 +2359,8 @@ void LLWindowSDL::initCursors(bool useLegacyCursors) // <FS:LO> Legacy cursor se
     mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_END_ADD] = makeSDLCursorFromBMP("lltoolpathfindingpathendadd.BMP", 16, 16);
     mSDLCursors[UI_CURSOR_TOOLNO] = makeSDLCursorFromBMP("llno.BMP",8,8);
 
-    if (getenv("LL_ATI_MOUSE_CURSOR_BUG") != NULL) {
-        LL_INFOS() << "Disabling cursor updating due to LL_ATI_MOUSE_CURSOR_BUG" << LL_ENDL;
+    if (getenv("LL_ATI_MOUSE_CURSOR_BUG") != NULL && !gGLManager.mIsNVIDIA) {
+        LL_INFOS() << "Disabling cursor updating due to LL_ATI_MOUSE_CURSOR_BUG (ATI/AMD GPU detected)" << LL_ENDL;
         ATIbug = true;
     }
 }
@@ -2731,32 +2828,248 @@ void LLWindowSDL::destroySharedContext(void* context)
 
 void LLWindowSDL::toggleVSync(bool enable_vsync)
 {
+    mVSyncEnabled = enable_vsync;
+    
     if (enable_vsync)
     {
-        // try adaptive vsync first (-1) and if that fails, try regular vsync (1)
-        if (SDL_GL_SetSwapInterval(-1) == -1)
+        // Nvidia on Linux often has issues with adaptive vsync (-1)
+        // Try regular vsync first for Nvidia, adaptive for others
+        bool try_adaptive_first = !gGLManager.mIsNVIDIA;
+        bool vsync_success = false;
+        
+        if (try_adaptive_first)
         {
-            LL_INFOS() << "Failed to enable adaptive vsync, trying regular vsync" << LL_ENDL;
-            if (SDL_GL_SetSwapInterval(1) == -1)
+            // Try adaptive vsync first (-1) for non-Nvidia GPUs
+            if (SDL_GL_SetSwapInterval(-1) != -1)
             {
-                LL_WARNS() << "Failed to enable vsync" << LL_ENDL;
+                mCurrentSwapInterval = -1;
+                LL_DEBUGS() << "Adaptive vsync enabled" << LL_ENDL;
+                vsync_success = true;
             }
             else
             {
-                LL_DEBUGS() << "Vsync enabled" << LL_ENDL;
+                LL_INFOS() << "Failed to enable adaptive vsync, trying regular vsync" << LL_ENDL;
             }
         }
-        else
+        
+        if (!vsync_success)
         {
-            LL_DEBUGS() << "Adaptive vsync enabled" << LL_ENDL;
+            // Try regular vsync (1)
+            if (SDL_GL_SetSwapInterval(1) != -1)
+            {
+                mCurrentSwapInterval = 1;
+                LL_DEBUGS() << "Vsync enabled" << LL_ENDL;
+                vsync_success = true;
+            }
+            else if (try_adaptive_first)
+            {
+                LL_WARNS() << "Failed to enable vsync" << LL_ENDL;
+            }
+        }
+        
+        // If regular vsync worked and this is Nvidia, optionally try adaptive as fallback
+        if (vsync_success && !try_adaptive_first)
+        {
+            // For Nvidia, try adaptive as secondary option if regular worked
+            if (SDL_GL_SetSwapInterval(-1) != -1)
+            {
+                mCurrentSwapInterval = -1;
+                LL_DEBUGS() << "Nvidia adaptive vsync enabled as secondary option" << LL_ENDL;
+            }
+            else
+            {
+                // Fall back to regular vsync for Nvidia
+                SDL_GL_SetSwapInterval(1);
+                mCurrentSwapInterval = 1;
+                LL_DEBUGS() << "Nvidia using regular vsync (adaptive not supported)" << LL_ENDL;
+            }
+        }
+        
+        if (!vsync_success)
+        {
+            mCurrentSwapInterval = 0;
+            mVSyncEnabled = false;
+            LL_WARNS() << "Failed to enable any form of vsync" << LL_ENDL;
+            
+            // Try environment variable fallback for Nvidia
+            if (gGLManager.mIsNVIDIA)
+            {
+                #ifdef LL_LINUX
+                setenv("__GL_SYNC_TO_VBLANK", "1", 1);
+                LL_INFOS() << "Set __GL_SYNC_TO_VBLANK=1 for Nvidia fallback" << LL_ENDL;
+                #endif
+            }
         }
     }
     else
     {
         SDL_GL_SetSwapInterval(0);
+        mCurrentSwapInterval = 0;
         LL_DEBUGS() << "Vsync disabled" << LL_ENDL;
+        
+        // Clear Nvidia environment variable if set
+        if (gGLManager.mIsNVIDIA)
+        {
+            #ifdef LL_LINUX
+            unsetenv("__GL_SYNC_TO_VBLANK");
+            #endif
+        }
+    }
+    
+    mLastVerifiedSwapInterval = mCurrentSwapInterval;
+    mLastVSyncVerifyTime = LLTimer::getElapsedSeconds();
+}
+
+bool LLWindowSDL::verifyVSyncState(bool expected_state)
+{
+    // Check if enough time has passed since last verification (avoid spam)
+    F64 current_time = LLTimer::getElapsedSeconds();
+    if (current_time - mLastVSyncVerifyTime < 1.0) // Check at most once per second
+    {
+        return mVSyncEnabled == expected_state;
+    }
+    
+    // Get current swap interval from SDL
+    int actual_interval = SDL_GL_GetSwapInterval();
+    
+    // Verify state matches expectation with EXACT interval checking
+    bool state_matches = false;
+    bool interval_corrupted = false;
+    
+    if (expected_state)
+    {
+        // VSync should be enabled - interval should be 1 or -1 (adaptive), not corrupted values like 2,4,8
+        state_matches = (actual_interval == 1 || actual_interval == -1);
+        
+        // Detect corrupted intervals that cause low FPS (e.g., 8 causes 15fps on 120Hz monitors)
+        if (actual_interval != 0 && actual_interval != 1 && actual_interval != -1)
+        {
+            interval_corrupted = true;
+            LL_WARNS() << "VSync interval corrupted! Expected 1 or -1, got " << actual_interval 
+                       << " (causes " << (120.0f / actual_interval) << " FPS on 120Hz monitor)" << LL_ENDL;
+        }
+    }
+    else
+    {
+        // VSync should be disabled (interval should be zero)
+        state_matches = (actual_interval == 0);
+    }
+    
+    mLastVSyncVerifyTime = current_time;
+    
+    if (!state_matches || interval_corrupted)
+    {
+        LL_WARNS() << "VSync verification failed! Expected state: " << expected_state 
+                   << ", Actual interval: " << actual_interval 
+                   << ", Stored interval: " << mCurrentSwapInterval << LL_ENDL;
+        
+        // Attempt recovery
+        forceVSyncRecovery();
+        
+        // Re-check after recovery
+        int recovered_interval = SDL_GL_GetSwapInterval();
+        LL_INFOS() << "VSync recovery result: interval changed from " << actual_interval 
+                   << " to " << recovered_interval << LL_ENDL;
+        
+        state_matches = expected_state ? (recovered_interval == 1 || recovered_interval == -1) 
+                                       : (recovered_interval == 0);
+    }
+    else if (actual_interval != mLastVerifiedSwapInterval)
+    {
+        LL_INFOS() << "VSync interval changed from " << mLastVerifiedSwapInterval 
+                   << " to " << actual_interval << LL_ENDL;
+        mLastVerifiedSwapInterval = actual_interval;
+    }
+    
+    return state_matches;
+}
+
+void LLWindowSDL::forceVSyncRecovery()
+{
+    int corrupted_interval = SDL_GL_GetSwapInterval();
+    LL_INFOS() << "Forcing VSync recovery - corrupted interval: " << corrupted_interval 
+               << ", target state: " << mVSyncEnabled << LL_ENDL;
+    
+    // Store current state and force re-application
+    bool current_state = mVSyncEnabled;
+    
+    // Disable first to completely reset state
+    mVSyncEnabled = false;
+    SDL_GL_SetSwapInterval(0);
+    
+    // Verify disable worked
+    int disabled_interval = SDL_GL_GetSwapInterval();
+    if (disabled_interval != 0)
+    {
+        LL_WARNS() << "Failed to disable VSync, interval still: " << disabled_interval << LL_ENDL;
+    }
+    
+    // Small delay to ensure state change is processed
+    #ifdef LL_LINUX
+    usleep(2000); // 2ms delay for stability
+    #endif
+    
+    // Re-enable if it was supposed to be enabled with retry logic
+    if (current_state)
+    {
+        const int MAX_RETRIES = 3;
+        bool recovery_successful = false;
+        
+        for (int retry = 0; retry < MAX_RETRIES && !recovery_successful; retry++)
+        {
+            if (retry > 0)
+            {
+                LL_INFOS() << "VSync recovery attempt " << (retry + 1) << " of " << MAX_RETRIES << LL_ENDL;
+                #ifdef LL_LINUX
+                usleep(1000); // Additional delay between retries
+                #endif
+            }
+            
+            toggleVSync(true);
+            
+            // Verify the recovery worked
+            int new_interval = SDL_GL_GetSwapInterval();
+            if (new_interval == 1 || new_interval == -1) // Valid VSync intervals
+            {
+                recovery_successful = true;
+                LL_INFOS() << "VSync recovery successful! Interval: " << new_interval 
+                           << " (was corrupted at " << corrupted_interval << ")" << LL_ENDL;
+                mCurrentSwapInterval = new_interval;
+            }
+            else
+            {
+                LL_WARNS() << "VSync recovery attempt " << (retry + 1) << " failed. Got interval: " 
+                           << new_interval << " (expected 1 or -1)" << LL_ENDL;
+            }
+        }
+        
+        if (!recovery_successful)
+        {
+            LL_WARNS() << "VSync recovery FAILED after " << MAX_RETRIES << " attempts. "
+                       << "Performance may be degraded. Consider disabling VSync." << LL_ENDL;
+        }
     }
 }
+
+bool LLWindowSDL::isVSyncSupported()
+{
+    // Test if VSync is supported by attempting to enable it
+    int original_interval = SDL_GL_GetSwapInterval();
+    
+    // Try to set vsync to 1
+    int result = SDL_GL_SetSwapInterval(1);
+    
+    // Restore original interval
+    SDL_GL_SetSwapInterval(original_interval);
+    
+    return (result != -1);
+}
+
+int LLWindowSDL::getCurrentSwapInterval()
+{
+    return SDL_GL_GetSwapInterval();
+}
+
 // </FS:Zi>
 
 void LLWindowSDL::enableIME(bool b)
@@ -2830,6 +3143,361 @@ void LLWindowSDL::allowLanguageTextInput(LLPreeditor *preeditor, bool b)
     {
         SDL_StopTextInput();
     }
+}
+
+// ============================================================================
+// Advanced Frame Pacing System Implementation
+// ============================================================================
+
+void LLWindowSDL::initializeFramePacing()
+{
+    mFramePacingEnabled = true;  // Enable by default, can be controlled by settings
+    mTargetFrameTime = 1.0 / 60.0; // Default 60 FPS target (16.67ms)
+    mLastFrameTime = LLTimer::getElapsedSeconds();
+    mFrameTimeAccumulator = 0.0;
+    mAverageFrameTime = mTargetFrameTime;
+    mFrameVariance = 0.0;
+    mFrameCount = 0;
+    mConsecutiveFastFrames = 0;
+    mConsecutiveSlowFrames = 0;
+    mLastPacingAdjustment = LLTimer::getElapsedSeconds();
+    mAdaptivePacingEnabled = true;
+    mMinFrameTime = 1.0 / 240.0; // Cap at 240 FPS max (4.17ms)
+    mMaxFrameTime = 1.0 / 30.0;  // Cap at 30 FPS min (33.33ms)
+    
+    LL_INFOS("Window") << "Frame Pacing System initialized - Target: " 
+                       << (int)(1.0 / mTargetFrameTime) << " FPS" << LL_ENDL;
+}
+
+void LLWindowSDL::updateFramePacing()
+{
+    if (!mFramePacingEnabled)
+        return;
+        
+    F64 current_time = LLTimer::getElapsedSeconds();
+    F64 frame_time = current_time - mLastFrameTime;
+    
+    recordFrameTime(frame_time);
+    
+    // Adaptive frame time adjustment every 60 frames or every 2 seconds
+    if (mFrameCount % 60 == 0 || (current_time - mLastPacingAdjustment) > 2.0)
+    {
+        adjustTargetFrameTime();
+        mLastPacingAdjustment = current_time;
+    }
+    
+    // Handle multi-monitor VSync synchronization
+    synchronizeMultiMonitorVSync();
+}
+
+void LLWindowSDL::applyFramePacing()
+{
+    if (!mFramePacingEnabled)
+        return;
+        
+    F64 current_time = LLTimer::getElapsedSeconds();
+    
+    // Validate time progression to avoid infinite loops or negative time
+    if (current_time <= mLastFrameTime)
+    {
+        LL_WARNS("FramePacing") << "Time regression detected: current=" << current_time 
+                               << " last=" << mLastFrameTime << ", disabling frame pacing" << LL_ENDL;
+        mFramePacingEnabled = false;
+        return;
+    }
+    
+    F64 elapsed_frame_time = current_time - mLastFrameTime;
+    
+    // Sanity check for reasonable frame times (avoid extremely long or short frames)
+    if (elapsed_frame_time > 1.0) // More than 1 second per frame
+    {
+        LL_WARNS("FramePacing") << "Extremely long frame time detected: " << elapsed_frame_time 
+                               << " seconds, resetting" << LL_ENDL;
+        mLastFrameTime = current_time;
+        return;
+    }
+    
+    // Calculate how much time we need to wait to meet target frame rate
+    F64 remaining_time = mTargetFrameTime - elapsed_frame_time;
+    
+    // Only sleep if we have significant time remaining (>1ms) to avoid busy waiting
+    if (remaining_time > 0.001)
+    {
+        // Use high precision sleep
+        #ifdef LL_LINUX
+        // Linux: use nanosleep for better precision
+        struct timespec sleep_time;
+        sleep_time.tv_sec = 0;
+        sleep_time.tv_nsec = (long)(remaining_time * 1000000000.0);
+        nanosleep(&sleep_time, nullptr);
+        #else
+        // Other platforms: use SDL_Delay (millisecond precision)
+        SDL_Delay((Uint32)(remaining_time * 1000.0));
+        #endif
+    }
+    
+    mLastFrameTime = LLTimer::getElapsedSeconds();
+}
+
+bool LLWindowSDL::shouldSkipFrame()
+{
+    if (!mFramePacingEnabled)
+        return false;
+        
+    F64 current_time = LLTimer::getElapsedSeconds();
+    F64 elapsed_frame_time = current_time - mLastFrameTime;
+    
+    // Skip frame if we're running significantly faster than target
+    // This helps reduce unnecessary GPU load
+    if (elapsed_frame_time < (mTargetFrameTime * 0.5))
+    {
+        return true;
+    }
+    
+    return false;
+}
+
+void LLWindowSDL::recordFrameTime(F64 frame_time)
+{
+    mFrameCount++;
+    
+    // Update running average using exponential moving average
+    F64 alpha = 0.1; // Smoothing factor
+    mAverageFrameTime = alpha * frame_time + (1.0 - alpha) * mAverageFrameTime;
+    
+    // Calculate variance for stability measurement
+    F64 diff = frame_time - mAverageFrameTime;
+    mFrameVariance = alpha * (diff * diff) + (1.0 - alpha) * mFrameVariance;
+    
+    // Track consecutive fast/slow frames for adaptive adjustment
+    if (frame_time < mTargetFrameTime * 0.9)
+    {
+        mConsecutiveFastFrames++;
+        mConsecutiveSlowFrames = 0;
+    }
+    else if (frame_time > mTargetFrameTime * 1.1)
+    {
+        mConsecutiveSlowFrames++;
+        mConsecutiveFastFrames = 0;
+    }
+    else
+    {
+        mConsecutiveFastFrames = 0;
+        mConsecutiveSlowFrames = 0;
+    }
+}
+
+void LLWindowSDL::adjustTargetFrameTime()
+{
+    if (!mAdaptivePacingEnabled)
+        return;
+        
+    F64 stability_threshold = 0.001; // 1ms variance threshold
+    
+    // If we're consistently running fast and the system is stable
+    if (mConsecutiveFastFrames > 30 && mFrameVariance < stability_threshold)
+    {
+        // Increase target frame rate slightly (reduce frame time)
+        mTargetFrameTime *= 0.95;
+        mTargetFrameTime = llmax(mTargetFrameTime, mMinFrameTime);
+        
+        LL_DEBUGS("Window") << "Frame pacing: Increased target FPS to " 
+                           << (int)(1.0 / mTargetFrameTime) << LL_ENDL;
+    }
+    // If we're consistently running slow
+    else if (mConsecutiveSlowFrames > 10)
+    {
+        // Decrease target frame rate (increase frame time)
+        mTargetFrameTime *= 1.05;
+        mTargetFrameTime = llmin(mTargetFrameTime, mMaxFrameTime);
+        
+        LL_DEBUGS("Window") << "Frame pacing: Decreased target FPS to " 
+                           << (int)(1.0 / mTargetFrameTime) << LL_ENDL;
+    }
+    
+    // Reset counters after adjustment
+    mConsecutiveFastFrames = 0;
+    mConsecutiveSlowFrames = 0;
+}
+
+// Multi-Monitor VSync Support Implementation
+void LLWindowSDL::initializeMultiMonitorVSync()
+{
+    LL_INFOS("MultiMonitor") << "Initializing multi-monitor VSync support" << LL_ENDL;
+    
+    mMultiMonitorVSyncEnabled = false;
+    mPrimaryMonitorIndex = 0;
+    mCurrentMonitorIndex = -1;
+    mMultiMonitorSyncTarget = 1.0/60.0; // Default to 60Hz
+    mCrossMonitorSyncDetected = false;
+    
+    // Detect monitor configuration
+    detectMonitorConfiguration();
+    
+    // Enable multi-monitor VSync if multiple monitors detected
+    if (mMonitorRefreshRates.size() > 1)
+    {
+        mMultiMonitorVSyncEnabled = true;
+        mMultiMonitorSyncTarget = calculateOptimalSyncTarget();
+        
+        LL_INFOS("MultiMonitor") << "Multi-monitor VSync enabled with " << mMonitorRefreshRates.size() 
+                                << " monitors, sync target: " << (int)(1.0/mMultiMonitorSyncTarget) << " Hz" << LL_ENDL;
+    }
+    else
+    {
+        LL_DEBUGS("MultiMonitor") << "Single monitor detected, using standard VSync" << LL_ENDL;
+    }
+}
+
+void LLWindowSDL::detectMonitorConfiguration()
+{
+    mMonitorRefreshRates.clear();
+    
+    int num_displays = SDL_GetNumVideoDisplays();
+    if (num_displays < 1)
+    {
+        LL_WARNS("MultiMonitor") << "Failed to detect video displays" << LL_ENDL;
+        return;
+    }
+    
+    LL_INFOS("MultiMonitor") << "Detected " << num_displays << " display(s)" << LL_ENDL;
+    
+    for (int i = 0; i < num_displays; i++)
+    {
+        SDL_DisplayMode current_mode;
+        if (SDL_GetCurrentDisplayMode(i, &current_mode) == 0)
+        {
+            mMonitorRefreshRates.push_back(current_mode.refresh_rate);
+            
+            LL_DEBUGS("MultiMonitor") << "Display " << i << ": " 
+                                     << current_mode.w << "x" << current_mode.h 
+                                     << " @ " << current_mode.refresh_rate << "Hz" << LL_ENDL;
+        }
+        else
+        {
+            // Default to 60Hz if we can't get refresh rate
+            mMonitorRefreshRates.push_back(60);
+            LL_WARNS("MultiMonitor") << "Failed to get display mode for display " << i << ", assuming 60Hz" << LL_ENDL;
+        }
+    }
+}
+
+void LLWindowSDL::updateMonitorRefreshRates()
+{
+    // Re-detect monitor configuration (useful for dynamic monitor changes)
+    detectMonitorConfiguration();
+    
+    // Recalculate optimal sync target
+    if (mMultiMonitorVSyncEnabled)
+    {
+        F64 new_sync_target = calculateOptimalSyncTarget();
+        if (fabs(new_sync_target - mMultiMonitorSyncTarget) > 0.001) // Significant change
+        {
+            mMultiMonitorSyncTarget = new_sync_target;
+            LL_INFOS("MultiMonitor") << "Updated multi-monitor sync target to " 
+                                    << (int)(1.0/mMultiMonitorSyncTarget) << " Hz" << LL_ENDL;
+        }
+    }
+}
+
+void LLWindowSDL::synchronizeMultiMonitorVSync()
+{
+    if (!mMultiMonitorVSyncEnabled)
+        return;
+        
+    // Get current monitor
+    S32 current_monitor = getCurrentMonitor();
+    
+    // Check if we've moved to a different monitor
+    if (current_monitor != mCurrentMonitorIndex)
+    {
+        if (mCurrentMonitorIndex >= 0)
+        {
+            mCrossMonitorSyncDetected = true;
+            LL_DEBUGS("MultiMonitor") << "Window moved from monitor " << mCurrentMonitorIndex 
+                                     << " to monitor " << current_monitor << LL_ENDL;
+        }
+        
+        mCurrentMonitorIndex = current_monitor;
+        
+        // Update frame pacing target if we moved to a different monitor
+        if (current_monitor >= 0 && current_monitor < (S32)mMonitorRefreshRates.size())
+        {
+            F64 new_target = 1.0 / mMonitorRefreshRates[current_monitor];
+            if (fabs(new_target - mTargetFrameTime) > 0.001)
+            {
+                mTargetFrameTime = new_target;
+                LL_INFOS("MultiMonitor") << "Adjusted frame timing for monitor " << current_monitor 
+                                        << " (" << mMonitorRefreshRates[current_monitor] << " Hz)" << LL_ENDL;
+            }
+        }
+    }
+    
+    // Apply cross-monitor synchronization logic
+    if (mCrossMonitorSyncDetected)
+    {
+        // Use the optimal sync target that works across all monitors
+        mTargetFrameTime = mMultiMonitorSyncTarget;
+        mCrossMonitorSyncDetected = false; // Reset flag
+        
+        LL_DEBUGS("MultiMonitor") << "Applied cross-monitor synchronization" << LL_ENDL;
+    }
+}
+
+S32 LLWindowSDL::getCurrentMonitor()
+{
+    if (!mWindow)
+        return -1;
+        
+    // Get window display index
+    int display_index = SDL_GetWindowDisplayIndex(mWindow);
+    if (display_index < 0)
+    {
+        LL_WARNS("MultiMonitor") << "Failed to get window display index: " << SDL_GetError() << LL_ENDL;
+        return -1;
+    }
+    
+    return display_index;
+}
+
+F64 LLWindowSDL::calculateOptimalSyncTarget()
+{
+    if (mMonitorRefreshRates.empty())
+        return 1.0/60.0; // Default 60Hz
+        
+    // Find the Greatest Common Divisor (GCD) of all refresh rates
+    // This ensures smooth operation across all monitors
+    
+    S32 gcd_rate = mMonitorRefreshRates[0];
+    for (size_t i = 1; i < mMonitorRefreshRates.size(); i++)
+    {
+        S32 a = gcd_rate;
+        S32 b = mMonitorRefreshRates[i];
+        
+        // Calculate GCD using Euclidean algorithm
+        while (b != 0)
+        {
+            S32 temp = b;
+            b = a % b;
+            a = temp;
+        }
+        gcd_rate = a;
+    }
+    
+    // Use the GCD as the optimal sync rate
+    // This ensures all monitors can display frames without tearing
+    if (gcd_rate <= 0)
+        gcd_rate = 30; // Fallback to 30Hz minimum
+        
+    // Don't go below 30Hz for usability
+    if (gcd_rate < 30)
+        gcd_rate = 30;
+        
+    F64 sync_target = 1.0 / gcd_rate;
+    
+    LL_DEBUGS("MultiMonitor") << "Calculated optimal sync target: " << gcd_rate << " Hz" << LL_ENDL;
+    
+    return sync_target;
 }
 
 #endif // LL_SDL

@@ -1176,14 +1176,25 @@ bool LLImageGL::setSubImage(const U8* datap, S32 data_width, S32 data_height, S3
         }
 
 
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, data_width);
+        // RAII class to ensure GL state is always restored, even on errors
+        struct GLPixelStoreGuard {
+            bool mFormatSwapBytes;
+            GLPixelStoreGuard(S32 data_width, bool format_swap_bytes) : mFormatSwapBytes(format_swap_bytes) {
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, data_width);
+                if (mFormatSwapBytes) {
+                    glPixelStorei(GL_UNPACK_SWAP_BYTES, 1);
+                }
+            }
+            ~GLPixelStoreGuard() {
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                if (mFormatSwapBytes) {
+                    glPixelStorei(GL_UNPACK_SWAP_BYTES, 0);
+                }
+            }
+        };
+        
+        GLPixelStoreGuard pixel_guard(data_width, mFormatSwapBytes);
         stop_glerror();
-
-        if(mFormatSwapBytes)
-        {
-            glPixelStorei(GL_UNPACK_SWAP_BYTES, 1);
-            stop_glerror();
-        }
 
         const U8* sub_datap = datap + (y_pos * data_width + x_pos) * getComponents();
         // Update the GL texture
@@ -1206,15 +1217,8 @@ bool LLImageGL::setSubImage(const U8* datap, S32 data_width, S32 data_height, S3
         }
         gGL.getTexUnit(0)->disable();
         stop_glerror();
-
-        if(mFormatSwapBytes)
-        {
-            glPixelStorei(GL_UNPACK_SWAP_BYTES, 0);
-            stop_glerror();
-        }
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        stop_glerror();
+        
+        // GLPixelStoreGuard destructor will automatically restore GL state
         mGLTextureCreated = true;
     }
     return true;
@@ -1742,18 +1746,32 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
             // wait for texture upload to finish before notifying main thread
             // upload is complete
             auto sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-            glFlush();
-            glClientWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
-            glDeleteSync(sync);
+            if (sync != 0)  // Validate sync object was created successfully
+            {
+                glFlush();
+                GLenum result = glClientWaitSync(sync, 0, 16000000); // 16ms timeout instead of infinite blocking
+                if (result == GL_TIMEOUT_EXPIRED)
+                {
+                    LL_WARNS("RenderInit") << "Nvidia texture sync timeout after 16ms - continuing anyway" << LL_ENDL;
+                }
+                else if (result == GL_WAIT_FAILED)
+                {
+                    LL_WARNS("RenderInit") << "Nvidia texture sync failed - OpenGL error: " << std::hex << glGetError() << std::dec << LL_ENDL;
+                }
+                glDeleteSync(sync);
+            }
+            else
+            {
+                LL_WARNS("RenderInit") << "Failed to create Nvidia sync object - falling back to simple flush" << LL_ENDL;
+                glFlush();
+            }
         }
         else
         {
             // post a sync to the main thread (will execute before tex name swap lambda below)
-            // glFlush calls here are partly superstitious and partly backed by observation
-            // on AMD hardware
+            // Single flush before fence for AMD hardware compatibility
             glFlush();
             auto sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-            glFlush();
             LL::WorkQueue::postMaybe(
                 mMainQueue,
                 [=]()
@@ -1761,7 +1779,12 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
                     LL_PROFILE_ZONE_NAMED_CATEGORY_TEXTURE("cglt - wait sync");
                     {
                         LL_PROFILE_ZONE_NAMED_CATEGORY_TEXTURE("glWaitSync");
-                        glWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
+                        glWaitSync(sync, 0, GL_TIMEOUT_IGNORED); // Required by OpenGL spec
+                        GLenum gl_error = glGetError();
+                        if (gl_error != GL_NO_ERROR)
+                        {
+                            LL_WARNS("RenderInit") << "AMD/Intel texture sync error: " << std::hex << gl_error << std::dec << LL_ENDL;
+                        }
                     }
                     {
                         LL_PROFILE_ZONE_NAMED_CATEGORY_TEXTURE("glDeleteSync");
@@ -2613,6 +2636,79 @@ void LLImageGL::checkActiveThread()
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,  nummips);
 */
+
+// ============================================================================
+// Enhanced Texture Compression Format Selection
+// ============================================================================
+
+LLGLenum LLImageGL::selectOptimalCompressionFormat(S32 components, bool is_normal_map, bool high_quality)
+{
+    // Return uncompressed format if compression is disabled
+    if (!sCompressTextures)
+    {
+        switch (components)
+        {
+            case 1: return GL_R8;
+            case 2: return GL_RG8;
+            case 3: return GL_RGB8;
+            case 4: return GL_RGBA8;
+            default: return GL_RGBA8;
+        }
+    }
+    
+    // Enhanced compression format selection based on content and hardware
+    if (is_normal_map && components >= 2)
+    {
+        // Normal maps benefit from RGTC compression
+        if (gGLManager.mHasRGTC)
+        {
+            return (components >= 3) ? GL_COMPRESSED_RG_RGTC2 : GL_COMPRESSED_RED_RGTC1;
+        }
+        else if (gGLManager.mHasS3TC)
+        {
+            return GL_COMPRESSED_RGBA_S3TC_DXT5_EXT; // DXT5 for normal maps
+        }
+    }
+    else if (high_quality && components >= 3)
+    {
+        // High quality textures - use BPTC if available (best quality)
+        if (gGLManager.mHasBPTC)
+        {
+            return (components == 4) ? GL_COMPRESSED_RGBA_BPTC_UNORM : GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT;
+        }
+        else if (gGLManager.mHasS3TC)
+        {
+            return (components == 4) ? GL_COMPRESSED_RGBA_S3TC_DXT5_EXT : GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
+        }
+    }
+    else if (gGLManager.mHasS3TC)
+    {
+        // Standard compression - use S3TC/DXT for compatibility
+        switch (components)
+        {
+            case 1:
+                return gGLManager.mHasRGTC ? GL_COMPRESSED_RED_RGTC1 : GL_COMPRESSED_RGB;
+            case 2:
+                return gGLManager.mHasRGTC ? GL_COMPRESSED_RG_RGTC2 : GL_COMPRESSED_RGBA;
+            case 3:
+                return GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
+            case 4:
+                return GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
+            default:
+                return GL_COMPRESSED_RGBA;
+        }
+    }
+    
+    // Fallback to generic compression
+    switch (components)
+    {
+        case 1: return GL_COMPRESSED_RED;
+        case 2: return GL_COMPRESSED_RG;
+        case 3: return GL_COMPRESSED_RGB;
+        case 4: return GL_COMPRESSED_RGBA;
+        default: return GL_COMPRESSED_RGBA;
+    }
+}
 
 LLImageGLThread::LLImageGLThread(LLWindow* window)
     // We want exactly one thread.

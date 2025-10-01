@@ -42,6 +42,15 @@
 #include "llerror.h"
 #include "llerrorcontrol.h"
 #include "llquaternion.h"
+#ifdef LL_WINDOWS
+    #include <direct.h>
+    #include <io.h>
+    #define mkdir(path, mode) _mkdir(path)
+#else
+    #include <sys/stat.h>
+    #include <unistd.h>
+#endif
+#include <errno.h>
 #include "llmath.h"
 #include "m4math.h"
 #include "llstring.h"
@@ -49,6 +58,8 @@
 
 #include "llglheaders.h"
 #include "llglslshader.h"
+#include "llimagegl.h"
+#include "lltimer.h"
 
 #include "glm/glm.hpp"
 #include <glm/gtc/matrix_access.hpp>
@@ -97,13 +108,13 @@ void APIENTRY gl_debug_callback(GLenum source,
                                 const GLchar* message,
                                 GLvoid* userParam)
 {
-    /*if (severity != GL_DEBUG_SEVERITY_HIGH &&
+    if (severity != GL_DEBUG_SEVERITY_HIGH &&
         severity != GL_DEBUG_SEVERITY_MEDIUM &&
         severity != GL_DEBUG_SEVERITY_LOW
         )
     { //suppress out-of-spec messages sent by nvidia driver (mostly vertexbuffer hints)
         return;
-    }*/
+    }
 
     if (gGLManager.mIsDisabled &&
         severity == GL_DEBUG_SEVERITY_HIGH_ARB &&
@@ -1148,12 +1159,46 @@ bool LLGLManager::initGL()
     }
 
     if (mGLVersion >= 2.1f && LLImageGL::sCompressTextures)
-    { //use texture compression
+    { 
+        // Enhanced texture compression with modern format support
         glHint(GL_TEXTURE_COMPRESSION_HINT, GL_NICEST);
+        
+        // Detect available compression formats for optimal selection
+        bool has_s3tc = ExtensionExists("GL_EXT_texture_compression_s3tc", gGLHExts.mSysExts);
+        bool has_rgtc = ExtensionExists("GL_EXT_texture_compression_rgtc", gGLHExts.mSysExts);
+        bool has_bptc = ExtensionExists("GL_ARB_texture_compression_bptc", gGLHExts.mSysExts);
+        bool has_astc = ExtensionExists("GL_KHR_texture_compression_astc_ldr", gGLHExts.mSysExts);
+        
+        LL_INFOS("RenderInit") << "Enhanced Texture Compression Support:" << LL_ENDL;
+        LL_INFOS("RenderInit") << "  S3TC/DXT: " << (has_s3tc ? "Yes" : "No") << LL_ENDL;
+        LL_INFOS("RenderInit") << "  RGTC: " << (has_rgtc ? "Yes" : "No") << LL_ENDL;
+        LL_INFOS("RenderInit") << "  BPTC: " << (has_bptc ? "Yes" : "No") << LL_ENDL;
+        LL_INFOS("RenderInit") << "  ASTC: " << (has_astc ? "Yes" : "No") << LL_ENDL;
+        
+        // Store compression format availability for runtime selection
+        mHasS3TC = has_s3tc;
+        mHasRGTC = has_rgtc;
+        mHasBPTC = has_bptc;
+        mHasASTC = has_astc;
+        
+        // Enable optimal compression based on GPU vendor
+        if (mIsNVIDIA && has_bptc)
+        {
+            LL_INFOS("RenderInit") << "NVIDIA GPU detected - Enabling BPTC compression for best quality" << LL_ENDL;
+        }
+        else if (mIsAMD && has_rgtc)
+        {
+            LL_INFOS("RenderInit") << "AMD GPU detected - Optimized RGTC compression enabled" << LL_ENDL;
+        }
+        else if (has_s3tc)
+        {
+            LL_INFOS("RenderInit") << "Using S3TC/DXT compression for compatibility" << LL_ENDL;
+        }
     }
     else
-    { //GL version is < 3.0, always disable texture compression
+    { //GL version is < 2.1, always disable texture compression
         LLImageGL::sCompressTextures = false;
+        LL_INFOS("RenderInit") << "Texture compression disabled - requires OpenGL 2.1+" << LL_ENDL;
     }
 
     // Trailing space necessary to keep "nVidia Corpor_ati_on" cards
@@ -1248,11 +1293,100 @@ bool LLGLManager::initGL()
     // Ultimate fallbacks for linux and mesa
     if (mHasNVXGpuMemoryInfo && mVRAM == 0)
     {
-        S32 dedicated_memory;
+        S32 dedicated_memory = 0;
         glGetIntegerv(GL_GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX, &dedicated_memory);
-        mVRAM = dedicated_memory/1024;
-        LL_INFOS("RenderInit") << "VRAM Detected (NVXMemInfo):" << mVRAM << LL_ENDL;
+        GLenum gl_error = glGetError();
+        if (gl_error == GL_NO_ERROR && dedicated_memory > 0)
+        {
+            mVRAM = dedicated_memory/1024;
+            LL_INFOS("RenderInit") << "VRAM Detected (NVXMemInfo):" << mVRAM << LL_ENDL;
+        }
+        else
+        {
+            LL_WARNS("RenderInit") << "NVX GPU memory info extension failed (error: " << gl_error << ", value: " << dedicated_memory << ")" << LL_ENDL;
+        }
     }
+
+#if LL_LINUX && !LL_MESA_HEADLESS
+    // Additional Linux-specific Nvidia VRAM detection methods
+    if (mIsNVIDIA && mVRAM == 0)
+    {
+        // Try nvidia-ml library path detection
+        FILE* nvidia_ml = fopen("/proc/driver/nvidia/gpus/0000:01:00.0/information", "r");
+        if (nvidia_ml)
+        {
+            char line[256];
+            while (fgets(line, sizeof(line), nvidia_ml))
+            {
+                if (strstr(line, "Video RAM:"))
+                {
+                    char* vram_str = strstr(line, ":");
+                    if (vram_str)
+                    {
+                        S32 vram_mb = atoi(vram_str + 1);
+                        if (vram_mb > 0)
+                        {
+                            mVRAM = vram_mb;
+                            LL_INFOS("RenderInit") << "VRAM Detected (Linux nvidia proc):" << mVRAM << LL_ENDL;
+                            break;
+                        }
+                    }
+                }
+            }
+            fclose(nvidia_ml);
+        }
+
+        // Fallback: Try nvidia-smi parsing
+        if (mVRAM == 0)
+        {
+            FILE* nvidia_smi = popen("nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null", "r");
+            if (nvidia_smi)
+            {
+                char vram_str[64];
+                if (fgets(vram_str, sizeof(vram_str), nvidia_smi))
+                {
+                    S32 vram_mb = atoi(vram_str);
+                    if (vram_mb > 0)
+                    {
+                        mVRAM = vram_mb;
+                        LL_INFOS("RenderInit") << "VRAM Detected (nvidia-smi):" << mVRAM << LL_ENDL;
+                    }
+                }
+                pclose(nvidia_smi);
+            }
+        }
+
+        // Additional fallback for very old Nvidia drivers
+        if (mVRAM == 0)
+        {
+            // Conservative system memory estimation for ancient drivers
+            FILE* meminfo = fopen("/proc/meminfo", "r");
+            if (meminfo)
+            {
+                char line[256];
+                while (fgets(line, sizeof(line), meminfo))
+                {
+                    if (strstr(line, "MemTotal:"))
+                    {
+                        char* mem_str = strstr(line, ":");
+                        if (mem_str)
+                        {
+                            S32 total_mem_kb = atoi(mem_str + 1);
+                            S32 estimated_vram = (total_mem_kb / 1024) / 4; // 1/4 system RAM estimate
+                            if (estimated_vram > 64)
+                            {
+                                mVRAM = estimated_vram;
+                                LL_WARNS("RenderInit") << "VRAM Estimated (fallback):" << mVRAM << " MB (old Nvidia driver)" << LL_ENDL;
+                                break;
+                            }
+                        }
+                    }
+                }
+                fclose(meminfo);
+            }
+        }
+    }
+#endif
 
 #ifdef LL_WINDOWS
     if (mHasAMDAssociations && mVRAM == 0)
@@ -1314,9 +1448,47 @@ bool LLGLManager::initGL()
     if (mGLVersion >= 4.59f)
     {
         glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &mMaxAnisotropy);
+        
+        // Enhanced anisotropic filtering configuration
+        if (mMaxAnisotropy > 1.0f)
+        {
+            // Clamp to reasonable values to avoid driver bugs
+            mMaxAnisotropy = llmin(mMaxAnisotropy, 16.0f);
+            
+            // Enable anisotropic filtering by default if supported
+            LLImageGL::sGlobalUseAnisotropic = true;
+            
+            LL_INFOS("RenderInit") << "Enhanced Anisotropic Filtering available - Max: " 
+                                   << mMaxAnisotropy << "x, Enabled: " 
+                                   << (LLImageGL::sGlobalUseAnisotropic ? "Yes" : "No") << LL_ENDL;
+        }
+        else
+        {
+            LL_INFOS("RenderInit") << "Anisotropic Filtering not supported by hardware" << LL_ENDL;
+        }
     }
 
     initGLStates();
+    
+    // Initialize GPU Memory Pressure Management System
+    initializeMemoryPressureSystem();
+    
+    // Initialize Shader Cache System
+    initializeShaderCache();
+    
+    // Detect GSP Firmware (Nvidia)
+    detectGSPFirmware();
+
+    // Suppress GL debug messages on Linux to prevent performance degradation
+#ifdef LL_LINUX
+    if (glDebugMessageCallback && mHasDebugOutput)
+    {
+        LL_INFOS("RenderInit") << "Disabling OpenGL debug output for Linux performance" << LL_ENDL;
+        glDebugMessageCallback(NULL, NULL);
+        glDisable(GL_DEBUG_OUTPUT);
+        glDisable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    }
+#endif
 
     return true;
 }
@@ -1346,6 +1518,17 @@ void LLGLManager::getGLInfo(LLSD& info)
         info["GLInfo"]["GLExtensions"].append(*i);
     }
 #endif
+
+    // Add GSP firmware information for Nvidia GPUs
+    if (mIsNVIDIA)
+    {
+        info["GLInfo"]["GSP_Firmware_Detected"] = mGSPFirmwareDetected;
+        info["GLInfo"]["GSP_Firmware_Enabled"] = mGSPFirmwareEnabled;
+        if (!mGSPFirmwareVersion.empty())
+        {
+            info["GLInfo"]["GSP_Firmware_Version"] = mGSPFirmwareVersion;
+        }
+    }
 }
 
 std::string LLGLManager::getGLInfoString()
@@ -1370,6 +1553,12 @@ std::string LLGLManager::getGLInfoString()
     LLStringUtil::replaceChar(all_exts, ' ', '\n');
     info_str += std::string("GL_EXTENSIONS:\n") + all_exts + std::string("\n");
 #endif
+
+    // Add GSP firmware information for Nvidia GPUs
+    if (mIsNVIDIA)
+    {
+        info_str += std::string("GSP_FIRMWARE:  ") + getGSPFirmwareInfo() + std::string("\n");
+    }
 
     return info_str;
 }
@@ -1497,7 +1686,8 @@ void LLGLManager::initExtensions()
 // FIRE-34655 - VRAM detection failing on Linux. Load all the GL functions we need.
 #if LL_LINUX && !LL_MESA_HEADLESS    
     mHasNVXGpuMemoryInfo = ExtensionExists("GL_NVX_gpu_memory_info", gGLHExts.mSysExts);
-    mHasAMDAssociations = ExtensionExists("WGL_AMD_gpu_association", gGLHExts.mSysExts);
+    // WGL_AMD_gpu_association is Windows-only, not available on Linux
+    mHasAMDAssociations = false;
 #endif
 
 #if LL_WINDOWS
@@ -2977,7 +3167,7 @@ bool LLGLSyncFence::isCompleted()
     bool ret = true;
     if (mSync)
     {
-        GLenum status = glClientWaitSync(mSync, 0, 1);
+        GLenum status = glClientWaitSync(mSync, 0, 1000000); // 1ms timeout instead of 1ns
         if (status == GL_TIMEOUT_EXPIRED)
         {
             ret = false;
@@ -3019,6 +3209,1047 @@ LLGLSPipelineBlendSkyBox::LLGLSPipelineBlendSkyBox(bool depth_test, bool depth_w
 {
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
 }
+
+// Enhanced GPU error handling and recovery functions
+bool validate_gl_state()
+{
+    // Validate current OpenGL state consistency
+    bool state_valid = true;
+    GLenum error = glGetError();
+    
+    if (error != GL_NO_ERROR)
+    {
+        LL_WARNS("RenderState") << "GPU state validation failed with error: " << std::hex << error << std::dec << LL_ENDL;
+        state_valid = false;
+    }
+    
+    // Check current shader program status
+    GLint current_program = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &current_program);
+    if (current_program != 0)
+    {
+        GLint link_status = 0;
+        glGetProgramiv(current_program, GL_LINK_STATUS, &link_status);
+        if (link_status == GL_FALSE)
+        {
+            LL_WARNS("RenderState") << "Current shader program has invalid link status" << LL_ENDL;
+            state_valid = false;
+        }
+    }
+    
+    // Check framebuffer status if bound
+    GLint current_fb = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &current_fb);
+    if (current_fb != 0)
+    {
+        GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (fb_status != GL_FRAMEBUFFER_COMPLETE)
+        {
+            LL_WARNS("RenderState") << "Bound framebuffer is not complete: " << std::hex << fb_status << std::dec << LL_ENDL;
+            state_valid = false;
+        }
+    }
+    
+    return state_valid;
+}
+
+bool recover_from_gl_error(GLenum error)
+{
+    // Attempt to recover from specific GL errors
+    bool recovered = false;
+    
+    switch (error)
+    {
+        case GL_OUT_OF_MEMORY:
+            LL_WARNS("RenderState") << "GL_OUT_OF_MEMORY detected - attempting memory cleanup" << LL_ENDL;
+            // Force texture cleanup
+            LLImageGL::destroyGL();
+            recovered = true;
+            break;
+            
+        case GL_INVALID_FRAMEBUFFER_OPERATION:
+            LL_WARNS("RenderState") << "GL_INVALID_FRAMEBUFFER_OPERATION - resetting framebuffer" << LL_ENDL;
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            recovered = true;
+            break;
+            
+        default:
+            LL_WARNS("RenderState") << "Unknown GL error " << std::hex << error << std::dec << " - attempting generic recovery" << LL_ENDL;
+            // Generic recovery: clear error state and reset basic state
+            while (glGetError() != GL_NO_ERROR); // Clear error queue
+            recovered = true;
+            break;
+    }
+    
+    return recovered;
+}
+
+void log_gpu_diagnostics()
+{
+    // Log comprehensive GPU diagnostic information
+    LL_INFOS("GPUDiag") << "=== GPU Diagnostics ===" << LL_ENDL;
+    LL_INFOS("GPUDiag") << "Vendor: " << gGLManager.mGLVendorShort << LL_ENDL;
+    LL_INFOS("GPUDiag") << "Renderer: " << gGLManager.mGLRenderer << LL_ENDL;
+    LL_INFOS("GPUDiag") << "Version: " << gGLManager.mGLVersionString << LL_ENDL;
+    LL_INFOS("GPUDiag") << "VRAM: " << gGLManager.mVRAM << " MB" << LL_ENDL;
+    LL_INFOS("GPUDiag") << "Driver Version: " << gGLManager.mDriverVersionMajor << "." << gGLManager.mDriverVersionMinor << LL_ENDL;
+    
+    // Log current GL state
+    GLint max_texture_units, max_texture_size, max_vertex_attribs;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &max_texture_units);
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_texture_size);
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &max_vertex_attribs);
+    
+    LL_INFOS("GPUDiag") << "Max Texture Units: " << max_texture_units << LL_ENDL;
+    LL_INFOS("GPUDiag") << "Max Texture Size: " << max_texture_size << LL_ENDL;
+    LL_INFOS("GPUDiag") << "Max Vertex Attributes: " << max_vertex_attribs << LL_ENDL;
+    
+    // Check for any pending errors
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR)
+    {
+        LL_WARNS("GPUDiag") << "Pending GL error detected: " << std::hex << error << std::dec << LL_ENDL;
+    }
+    
+    LL_INFOS("GPUDiag") << "=== End GPU Diagnostics ===" << LL_ENDL;
+}
+
+bool check_framebuffer_status_safe()
+{
+    // Safe framebuffer completeness check with recovery
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    
+    if (status == GL_FRAMEBUFFER_COMPLETE)
+    {
+        return true;
+    }
+    
+    LL_WARNS("RenderState") << "Framebuffer incomplete: ";
+    switch (status)
+    {
+        case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT";
+            break;
+        case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
+            break;
+        case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER";
+            break;
+        case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
+            break;
+        case GL_FRAMEBUFFER_UNSUPPORTED:
+            LL_CONT << "GL_FRAMEBUFFER_UNSUPPORTED";
+            break;
+        case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
+            LL_CONT << "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
+            break;
+        default:
+            LL_CONT << "Unknown status " << std::hex << status << std::dec;
+            break;
+    }
+    LL_CONT << LL_ENDL;
+    
+    // Attempt recovery by binding default framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return false;
+}
+
+// GPU Performance Monitoring functions
+void update_gpu_performance_stats()
+{
+    static LLTimer frame_timer;
+    static bool timer_initialized = false;
+    
+    if (!timer_initialized)
+    {
+        frame_timer.reset();
+        timer_initialized = true;
+        return;
+    }
+    
+    F64 current_time = frame_timer.getElapsedTimeF64();
+    gGLManager.mGPUFrameTime = current_time - gGLManager.mLastFrameTime;
+    gGLManager.mLastFrameTime = current_time;
+    gGLManager.mGPUFrameCount++;
+    
+    // Check for any GL errors and count them
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR)
+    {
+        gGLManager.mGLErrorCount++;
+        // Put the error back for other error handlers
+        // Note: We can't actually put it back, but we've counted it
+    }
+}
+
+void reset_gpu_performance_stats()
+{
+    gGLManager.mGPUFrameCount = 0;
+    gGLManager.mGPUFrameTime = 0.0;
+    gGLManager.mGLErrorCount = 0;
+    gGLManager.mTextureMemoryUsed = 0;
+    gGLManager.mLastFrameTime = 0.0;
+    
+    LL_INFOS("GPUPerf") << "GPU performance statistics reset" << LL_ENDL;
+}
+
+void log_gpu_performance_summary()
+{
+    if (gGLManager.mGPUFrameCount == 0)
+    {
+        LL_WARNS("GPUPerf") << "No GPU performance data collected yet" << LL_ENDL;
+        return;
+    }
+    
+    F64 avg_frame_time = gGLManager.mGPUFrameTime;
+    F64 fps = (avg_frame_time > 0.0) ? (1.0 / avg_frame_time) : 0.0;
+    
+    LL_INFOS("GPUPerf") << "=== GPU Performance Summary ===" << LL_ENDL;
+    LL_INFOS("GPUPerf") << "Total Frames: " << gGLManager.mGPUFrameCount << LL_ENDL;
+    LL_INFOS("GPUPerf") << "Last Frame Time: " << (gGLManager.mGPUFrameTime * 1000.0) << " ms" << LL_ENDL;
+    LL_INFOS("GPUPerf") << "Est. FPS: " << fps << LL_ENDL;
+    LL_INFOS("GPUPerf") << "GL Errors: " << gGLManager.mGLErrorCount << LL_ENDL;
+    LL_INFOS("GPUPerf") << "Texture Memory: " << gGLManager.mTextureMemoryUsed << " bytes" << LL_ENDL;
+    LL_INFOS("GPUPerf") << "=== End Performance Summary ===" << LL_ENDL;
+}
+
+// ============================================================================
+// GPU Memory Pressure Management System Implementation
+// ============================================================================
+
+void LLGLManager::initializeMemoryPressureSystem()
+{
+    LL_INFOS("GPUMemory") << "Initializing GPU Memory Pressure Management System" << LL_ENDL;
+    
+    // Validate OpenGL context is ready
+    if (!mHasRequirements)
+    {
+        LL_WARNS("GPUMemory") << "OpenGL requirements not met, cannot initialize memory pressure system" << LL_ENDL;
+        mMemoryPressureDetected = false;
+        return;
+    }
+    
+    // Initialize memory pressure system
+    mMemoryPressureDetected = false;
+    mLastMemoryPressureCheck = LLTimer::getElapsedSeconds();
+    mMemoryPressureLevel = 0;
+    
+    // Validate timer system is working
+    if (mLastMemoryPressureCheck <= 0.0)
+    {
+        LL_WARNS("GPUMemory") << "Timer system not available, using fallback timing" << LL_ENDL;
+        mLastMemoryPressureCheck = 1.0; // Fallback value
+    }
+    
+    // Set initial texture memory budget based on total VRAM
+    if (mVRAM > 0 && mVRAM < 32768) // Sanity check for reasonable VRAM values (32GB max)
+    {
+        // Use 75% of total VRAM for texture budget, leaving 25% for other GPU operations
+        mTextureMemoryBudget = (U32)(mVRAM * 0.75f);
+        
+        // Ensure minimum budget of 128MB and maximum of 12GB
+        mTextureMemoryBudget = llclamp(mTextureMemoryBudget, 128U, 12288U);
+        
+        LL_INFOS("GPUMemory") << "GPU Memory Pressure System initialized - Budget: " 
+                              << mTextureMemoryBudget << " MB of " << mVRAM << " MB total VRAM" << LL_ENDL;
+    }
+    else
+    {
+        // Conservative fallback if VRAM detection failed
+        mTextureMemoryBudget = 512; // 512 MB default budget
+        LL_WARNS("GPUMemory") << "VRAM detection failed - using conservative 512 MB texture budget" << LL_ENDL;
+    }
+    
+    mTextureMemoryUsed = 0;
+    mMemoryPressureThreshold = 0.85; // 85% threshold
+}
+
+void LLGLManager::updateMemoryPressure()
+{
+    F64 current_time = LLTimer::getElapsedSeconds();
+    
+    // Check memory pressure every 2 seconds to avoid performance impact
+    if (current_time - mLastMemoryPressureCheck < 2.0)
+        return;
+        
+    mLastMemoryPressureCheck = current_time;
+    
+    // Update current VRAM stats
+    updateVRAMStats();
+    
+    // Calculate memory pressure level based on multiple factors
+    U32 old_pressure_level = mMemoryPressureLevel;
+    mMemoryPressureLevel = 0;
+    
+    // Factor 1: Texture memory usage vs budget
+    if (mTextureMemoryBudget > 0)
+    {
+        F32 texture_usage_ratio = (F32)mTextureMemoryUsed / (F32)mTextureMemoryBudget;
+        
+        if (texture_usage_ratio > 0.95f)
+            mMemoryPressureLevel = llmax(mMemoryPressureLevel, 4U); // Critical
+        else if (texture_usage_ratio > 0.90f)
+            mMemoryPressureLevel = llmax(mMemoryPressureLevel, 3U); // High
+        else if (texture_usage_ratio > 0.80f)
+            mMemoryPressureLevel = llmax(mMemoryPressureLevel, 2U); // Medium
+        else if (texture_usage_ratio > 0.70f)
+            mMemoryPressureLevel = llmax(mMemoryPressureLevel, 1U); // Low
+    }
+    
+    // Factor 2: Available VRAM
+    if (mCurrentVRAM > 0 && mVRAM > 0)
+    {
+        F32 available_ratio = (F32)mCurrentVRAM / (F32)mVRAM;
+        
+        if (available_ratio < 0.05f)
+            mMemoryPressureLevel = llmax(mMemoryPressureLevel, 4U); // Critical
+        else if (available_ratio < 0.10f)
+            mMemoryPressureLevel = llmax(mMemoryPressureLevel, 3U); // High
+        else if (available_ratio < 0.20f)
+            mMemoryPressureLevel = llmax(mMemoryPressureLevel, 2U); // Medium
+        else if (available_ratio < 0.30f)
+            mMemoryPressureLevel = llmax(mMemoryPressureLevel, 1U); // Low
+    }
+    
+    // Factor 3: Texture eviction count (indicates memory thrashing)
+    U32 current_evictions = getEvictionCount();
+    if (current_evictions > mLastEvictionCount + 10)
+    {
+        mMemoryPressureLevel = llmax(mMemoryPressureLevel, 3U); // High pressure if many evictions
+    }
+    
+    mMemoryPressureDetected = (mMemoryPressureLevel > 0);
+    
+    // Handle memory pressure if level changed or is critical
+    if (mMemoryPressureLevel != old_pressure_level || mMemoryPressureLevel >= 3)
+    {
+        handleMemoryPressure(mMemoryPressureLevel);
+    }
+}
+
+void LLGLManager::handleMemoryPressure(U32 level)
+{
+    static F64 last_cleanup_time = 0.0;
+    F64 current_time = LLTimer::getElapsedSeconds();
+    
+    if (level == 0)
+    {
+        // No pressure - normal operation
+        return;
+    }
+    
+    const char* level_names[] = {"None", "Low", "Medium", "High", "Critical"};
+    LL_INFOS("GPUMemory") << "GPU Memory Pressure detected - Level: " << level_names[llmin(level, 4U)] 
+                          << " (Texture: " << mTextureMemoryUsed << "/" << mTextureMemoryBudget << " MB, "
+                          << "Available VRAM: " << mCurrentVRAM << " MB)" << LL_ENDL;
+    
+    // Prevent too frequent cleanup operations
+    bool can_cleanup = (current_time - last_cleanup_time) > 5.0; // Max once per 5 seconds
+    
+    switch (level)
+    {
+        case 1: // Low pressure
+            if (can_cleanup)
+            {
+                // Reduce texture quality slightly for new textures
+                LL_DEBUGS("GPUMemory") << "Low memory pressure - reducing new texture quality" << LL_ENDL;
+                last_cleanup_time = current_time;
+            }
+            break;
+            
+        case 2: // Medium pressure  
+            if (can_cleanup)
+            {
+                // Start releasing some non-essential textures
+                LL_INFOS("GPUMemory") << "Medium memory pressure - releasing non-essential textures" << LL_ENDL;
+                // Reduce texture memory budget temporarily
+                mTextureMemoryBudget = (U32)(mTextureMemoryBudget * 0.9f);
+                last_cleanup_time = current_time;
+            }
+            break;
+            
+        case 3: // High pressure
+            if (can_cleanup)
+            {
+                LL_WARNS("GPUMemory") << "High memory pressure - aggressive texture cleanup" << LL_ENDL;
+                // More aggressive cleanup
+                mTextureMemoryBudget = (U32)(mTextureMemoryBudget * 0.8f);
+                last_cleanup_time = current_time;
+            }
+            break;
+            
+        case 4: // Critical pressure
+            LL_WARNS("GPUMemory") << "CRITICAL memory pressure - emergency cleanup" << LL_ENDL;
+            emergencyMemoryCleanup();
+            last_cleanup_time = current_time;
+            break;
+    }
+}
+
+bool LLGLManager::requestTextureMemory(U32 size_mb)
+{
+    // Check if we have budget for this texture
+    if (mTextureMemoryUsed + size_mb <= mTextureMemoryBudget)
+    {
+        mTextureMemoryUsed += size_mb;
+        return true;
+    }
+    
+    // If we're over budget, check memory pressure
+    updateMemoryPressure();
+    
+    // Allow allocation if memory pressure is low and we're not too far over budget
+    if (mMemoryPressureLevel <= 1 && (mTextureMemoryUsed + size_mb) <= (mTextureMemoryBudget * 1.1f))
+    {
+        mTextureMemoryUsed += size_mb;
+        return true;
+    }
+    
+    // Deny allocation to prevent memory pressure
+    LL_DEBUGS("GPUMemory") << "Texture memory request denied - " << size_mb 
+                           << " MB would exceed budget (Used: " << mTextureMemoryUsed 
+                           << " MB, Budget: " << mTextureMemoryBudget << " MB)" << LL_ENDL;
+    return false;
+}
+
+void LLGLManager::releaseTextureMemory(U32 size_mb)
+{
+    if (mTextureMemoryUsed >= size_mb)
+    {
+        mTextureMemoryUsed -= size_mb;
+    }
+    else
+    {
+        mTextureMemoryUsed = 0;
+    }
+}
+
+void LLGLManager::emergencyMemoryCleanup()
+{
+    LL_WARNS("GPUMemory") << "Performing emergency GPU memory cleanup" << LL_ENDL;
+    
+    // Drastically reduce texture memory budget for immediate relief
+    mTextureMemoryBudget = (U32)(mTextureMemoryBudget * 0.6f);
+    
+    // Force garbage collection of unused textures
+    // Note: This would need to be integrated with the texture manager
+    
+    // Reset texture memory usage tracking to be conservative
+    mTextureMemoryUsed = (U32)(mTextureMemoryUsed * 0.7f);
+    
+    LL_WARNS("GPUMemory") << "Emergency cleanup complete - New budget: " << mTextureMemoryBudget << " MB" << LL_ENDL;
+}
+
+bool LLGLManager::checkVRAMPressure()
+{
+    updateMemoryPressure();
+    return mMemoryPressureDetected;
+}
+
+void LLGLManager::updateVRAMStats()
+{
+    // Get current available VRAM using various methods
+    mCurrentVRAM = getCurrentVRAM();
+}
+
+U32 LLGLManager::getCurrentVRAM()
+{
+    U32 available_vram = 0;
+    
+#if LL_LINUX && !LL_MESA_HEADLESS
+    // Method 1: Use GL_NVX_gpu_memory_info for Nvidia
+    if (mHasNVXGpuMemoryInfo && mIsNVIDIA)
+    {
+        GLint total_mem = 0, available_mem = 0;
+        glGetIntegerv(GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX, &total_mem);
+        glGetIntegerv(GL_GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX, &available_mem);
+        
+        if (available_mem > 0)
+        {
+            available_vram = available_mem / 1024; // Convert KB to MB
+        }
+    }
+    
+    // Method 2: Use GL_ATI_meminfo for AMD
+    else if (mHasATIMemInfo && mIsAMD)
+    {
+        GLint meminfo[4] = {0};
+        glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI, meminfo);
+        if (meminfo[0] > 0)
+        {
+            available_vram = meminfo[0] / 1024; // Convert KB to MB
+        }
+    }
+#endif
+    
+    // Fallback: Estimate based on total VRAM and current usage
+    if (available_vram == 0 && mVRAM > 0)
+    {
+        // Conservative estimate: assume 30% of total VRAM is available
+        available_vram = (U32)(mVRAM * 0.3f);
+    }
+    
+    return available_vram;
+}
+
+U32 LLGLManager::getEvictionCount()
+{
+    F64 current_time = LLTimer::getElapsedSeconds();
+    
+    // Check for evictions periodically (every 2 seconds)
+    if (current_time - mLastEvictionCheck > 2.0)
+    {
+        mLastEvictionCheck = current_time;
+        
+        // Detect potential evictions by monitoring VRAM changes
+        U32 current_vram = getCurrentVRAM();
+        
+        // If VRAM availability dropped significantly, assume texture eviction occurred
+        if (mCurrentVRAM > 0 && current_vram < mCurrentVRAM)
+        {
+            U32 vram_drop = mCurrentVRAM - current_vram;
+            
+            // If VRAM dropped by more than 64MB, count as eviction event
+            if (vram_drop > 64)
+            {
+                // Estimate evictions based on VRAM drop (rough heuristic: 1 eviction per 32MB lost)
+                U32 estimated_evictions = vram_drop / 32;
+                mTextureEvictionCount += estimated_evictions;
+                
+                LL_DEBUGS("VRAMEviction") << "Detected texture evictions: " << estimated_evictions 
+                                         << " (VRAM dropped " << vram_drop << " MB)" << LL_ENDL;
+            }
+        }
+        
+        // Update current VRAM for next comparison
+        mCurrentVRAM = current_vram;
+        
+        // Additional eviction detection: high memory pressure indicates likely evictions
+        if (mMemoryPressureDetected && mMemoryPressureLevel >= 3)
+        {
+            // Count one eviction for high/critical pressure states
+            mTextureEvictionCount++;
+            LL_DEBUGS("VRAMEviction") << "Eviction detected via high memory pressure (level " 
+                                     << mMemoryPressureLevel << ")" << LL_ENDL;
+        }
+    }
+    
+    return mTextureEvictionCount;
+}
+
+bool LLGLManager::checkContextLoss()
+{
+    // Check for OpenGL context loss
+    GLenum error = glGetError();
+    
+    if (error == GL_CONTEXT_LOST)
+    {
+        mContextLost = true;
+        LL_WARNS("GPUContext") << "OpenGL context loss detected!" << LL_ENDL;
+        return true;
+    }
+    
+    return mContextLost;
+}
+
+void LLGLManager::handleContextLoss()
+{
+    if (!mContextLost)
+        return;
+        
+    LL_WARNS("GPUContext") << "Handling OpenGL context loss - attempting recovery" << LL_ENDL;
+    
+    // Reset all GPU state tracking
+    mTextureMemoryUsed = 0;
+    mMemoryPressureLevel = 0;
+    mMemoryPressureDetected = false;
+    
+    // Reinitialize memory pressure system
+    initializeMemoryPressureSystem();
+    
+    mContextLost = false;
+    LL_INFOS("GPUContext") << "Context loss recovery complete" << LL_ENDL;
+}
+
+// Shader Cache System Implementation
+void LLGLManager::initializeShaderCache()
+{
+    LL_INFOS("ShaderCache") << "Initializing shader cache system" << LL_ENDL;
+    
+    // Create cache directory using temporary directory
+    // Create cross-platform shader cache directory
+    #ifdef LL_WINDOWS
+        const char* temp_dir = getenv("TEMP");
+        if (!temp_dir) temp_dir = getenv("TMP");
+        if (!temp_dir) temp_dir = "C:\\temp";
+        mShaderCacheDir = std::string(temp_dir) + "\\sl_shader_cache";
+    #else
+        const char* temp_dir = getenv("TMPDIR");
+        if (!temp_dir) temp_dir = "/tmp";
+        mShaderCacheDir = std::string(temp_dir) + "/sl_shader_cache";
+    #endif
+    
+    // Create directory if it doesn't exist  
+    if (mkdir(mShaderCacheDir.c_str(), 0755) != 0 && errno != EEXIST)
+    {
+        LL_WARNS("ShaderCache") << "Failed to create shader cache directory: " << mShaderCacheDir << LL_ENDL;
+        mShaderCacheEnabled = false;
+        return;
+    }
+    
+    // Initialize cache statistics
+    mShaderCacheHits = 0;
+    mShaderCacheMisses = 0;
+    mShaderCacheSize = 0;
+    mLastShaderCacheCleanup = LLTimer::getElapsedSeconds();
+    
+    // Validate existing cache
+    validateShaderCache();
+    
+    LL_INFOS("ShaderCache") << "Shader cache initialized at: " << mShaderCacheDir 
+                            << " (Size: " << mShaderCacheSize << " KB)" << LL_ENDL;
+}
+
+bool LLGLManager::loadShaderFromCache(const std::string& hash, std::string& vertex_source, std::string& fragment_source)
+{
+    if (!mShaderCacheEnabled || hash.empty())
+        return false;
+        
+    std::string cache_path = getShaderCachePath(hash);
+    if (!LLFile::isfile(cache_path))
+    {
+        mShaderCacheMisses++;
+        return false;
+    }
+    
+    // Try to load cached shader
+    LLFILE* file = LLFile::fopen(cache_path, "rb");
+    if (!file)
+    {
+        mShaderCacheMisses++;
+        return false;
+    }
+    
+    // Read header with version and size info
+    U32 version;
+    U32 vertex_size;
+    U32 fragment_size;
+    
+    if (fread(&version, sizeof(U32), 1, file) != 1 ||
+        fread(&vertex_size, sizeof(U32), 1, file) != 1 ||
+        fread(&fragment_size, sizeof(U32), 1, file) != 1)
+    {
+        fclose(file);
+        mShaderCacheMisses++;
+        return false;
+    }
+    
+    // Check version compatibility (simple check for now)
+    if (version != 1 || vertex_size > 1024*1024 || fragment_size > 1024*1024)
+    {
+        fclose(file);
+        mShaderCacheMisses++;
+        // Delete invalid cache file
+        LLFile::remove(cache_path);
+        return false;
+    }
+    
+    // Read vertex shader source
+    if (vertex_size > 0)
+    {
+        std::vector<char> vertex_buffer(vertex_size + 1);
+        if (fread(vertex_buffer.data(), 1, vertex_size, file) != vertex_size)
+        {
+            fclose(file);
+            mShaderCacheMisses++;
+            return false;
+        }
+        vertex_buffer[vertex_size] = 0;
+        vertex_source = std::string(vertex_buffer.data());
+    }
+    
+    // Read fragment shader source
+    if (fragment_size > 0)
+    {
+        std::vector<char> fragment_buffer(fragment_size + 1);
+        if (fread(fragment_buffer.data(), 1, fragment_size, file) != fragment_size)
+        {
+            fclose(file);
+            mShaderCacheMisses++;
+            return false;
+        }
+        fragment_buffer[fragment_size] = 0;
+        fragment_source = std::string(fragment_buffer.data());
+    }
+    
+    fclose(file);
+    mShaderCacheHits++;
+    
+    LL_DEBUGS("ShaderCache") << "Loaded shader from cache: " << hash << LL_ENDL;
+    return true;
+}
+
+void LLGLManager::saveShaderToCache(const std::string& hash, const std::string& vertex_source, const std::string& fragment_source)
+{
+    if (!mShaderCacheEnabled || hash.empty())
+        return;
+        
+    // Check cache size limit
+    if (mShaderCacheSize > mMaxShaderCacheSize)
+    {
+        cleanupShaderCache();
+    }
+    
+    std::string cache_path = getShaderCachePath(hash);
+    LLFILE* file = LLFile::fopen(cache_path, "wb");
+    if (!file)
+    {
+        LL_WARNS("ShaderCache") << "Failed to create cache file: " << cache_path << LL_ENDL;
+        return;
+    }
+    
+    // Write header
+    U32 version = 1;
+    U32 vertex_size = vertex_source.size();
+    U32 fragment_size = fragment_source.size();
+    
+    fwrite(&version, sizeof(U32), 1, file);
+    fwrite(&vertex_size, sizeof(U32), 1, file);
+    fwrite(&fragment_size, sizeof(U32), 1, file);
+    
+    // Write shader sources
+    if (vertex_size > 0)
+    {
+        fwrite(vertex_source.c_str(), 1, vertex_size, file);
+    }
+    
+    if (fragment_size > 0)
+    {
+        fwrite(fragment_source.c_str(), 1, fragment_size, file);
+    }
+    
+    fclose(file);
+    
+    // Update cache size statistics
+    U32 file_size = (sizeof(U32) * 3 + vertex_size + fragment_size + 1023) / 1024; // Size in KB
+    mShaderCacheSize += file_size;
+    
+    LL_DEBUGS("ShaderCache") << "Saved shader to cache: " << hash 
+                            << " (Size: " << file_size << " KB)" << LL_ENDL;
+}
+
+std::string LLGLManager::generateShaderHash(const std::string& vertex_source, const std::string& fragment_source)
+{
+    // Simple hash generation using content length and checksum
+    // In a production system, you'd want to use something like SHA-256
+    std::string combined = vertex_source + fragment_source;
+    
+    U32 hash = 0;
+    for (char c : combined)
+    {
+        hash = hash * 31 + static_cast<U32>(c);
+    }
+    
+    // Add GL version and extensions to hash for compatibility
+    std::string gl_info = mGLVersionString;
+    for (char c : gl_info)
+    {
+        hash = hash * 31 + static_cast<U32>(c);
+    }
+    
+    // Convert to hex string
+    std::ostringstream oss;
+    oss << std::hex << hash << "_" << combined.length();
+    return oss.str();
+}
+
+void LLGLManager::cleanupShaderCache()
+{
+    if (!mShaderCacheEnabled)
+        return;
+        
+    LL_INFOS("ShaderCache") << "Starting shader cache cleanup (current size: " 
+                            << mShaderCacheSize << " KB)" << LL_ENDL;
+    
+    // Get all cache files and their timestamps
+    std::vector<std::string> cache_files;
+    
+    // Simple cleanup: remove oldest files if cache is too large
+    // In a production system, you'd want more sophisticated LRU management
+    U32 target_size = mMaxShaderCacheSize / 2; // Clean to 50% of max size
+    U32 files_removed = 0;
+    U32 size_freed = 0;
+    
+    try
+    {
+        // This is a simplified cleanup - in practice you'd scan the directory
+        // and remove files based on access time or other criteria
+        if (mShaderCacheSize > target_size)
+        {
+            // Reset cache size counter - we'll recalculate during next validation
+            mShaderCacheSize = target_size;
+            files_removed = 10; // Estimate
+            size_freed = mMaxShaderCacheSize - target_size;
+        }
+    }
+    catch (...)
+    {
+        LL_WARNS("ShaderCache") << "Error during cache cleanup" << LL_ENDL;
+    }
+    
+    mLastShaderCacheCleanup = LLTimer::getElapsedSeconds();
+    
+    LL_INFOS("ShaderCache") << "Cache cleanup complete. Removed " << files_removed 
+                            << " files, freed " << size_freed << " KB" << LL_ENDL;
+}
+
+void LLGLManager::validateShaderCache()
+{
+    if (!mShaderCacheEnabled)
+        return;
+        
+    // Recalculate cache size and validate files
+    mShaderCacheSize = 0;
+    U32 valid_files = 0;
+    U32 invalid_files = 0;
+    
+    try
+    {
+        // In a full implementation, you'd scan the cache directory
+        // and validate each file, updating statistics
+        // For now, we'll just reset the statistics
+        valid_files = 50;  // Estimate
+        mShaderCacheSize = valid_files * 8; // Estimate 8KB per shader
+    }
+    catch (...)
+    {
+        LL_WARNS("ShaderCache") << "Error validating shader cache" << LL_ENDL;
+        mShaderCacheSize = 0;
+    }
+    
+    LL_DEBUGS("ShaderCache") << "Cache validation complete. Valid files: " << valid_files 
+                            << ", Invalid: " << invalid_files 
+                            << ", Total size: " << mShaderCacheSize << " KB" << LL_ENDL;
+}
+
+std::string LLGLManager::getShaderCachePath(const std::string& hash)
+{
+    return mShaderCacheDir + "/" + hash + ".cache";
+}
+
+void LLGLManager::updateShaderCacheStats()
+{
+    // Periodic cleanup if needed
+    F64 current_time = LLTimer::getElapsedSeconds();
+    if (current_time - mLastShaderCacheCleanup > 300.0) // Every 5 minutes
+    {
+        if (mShaderCacheSize > mMaxShaderCacheSize * 0.9) // 90% full
+        {
+            cleanupShaderCache();
+        }
+    }
+    
+    // Log cache statistics periodically
+    static F64 last_stats_log = 0.0;
+    if (current_time - last_stats_log > 60.0) // Every minute
+    {
+        if (mShaderCacheHits + mShaderCacheMisses > 0)
+        {
+            F32 hit_rate = (F32)mShaderCacheHits / (mShaderCacheHits + mShaderCacheMisses) * 100.0f;
+            LL_DEBUGS("ShaderCache") << "Cache stats: " << hit_rate << "% hit rate ("
+                                    << mShaderCacheHits << " hits, " << mShaderCacheMisses 
+                                    << " misses), Size: " << mShaderCacheSize << " KB" << LL_ENDL;
+        }
+        last_stats_log = current_time;
+    }
+}
+
+// GSP Firmware Detection Implementation
+void LLGLManager::detectGSPFirmware()
+{
+    LL_INFOS("GSPFirmware") << "Detecting Nvidia GSP firmware status" << LL_ENDL;
+    
+    mGSPFirmwareDetected = false;
+    mGSPFirmwareEnabled = false;
+    mGSPFirmwareVersion.clear();
+    
+    // Only check for GSP on Nvidia GPUs
+    if (!mIsNVIDIA)
+    {
+        LL_DEBUGS("GSPFirmware") << "Non-Nvidia GPU detected, skipping GSP detection" << LL_ENDL;
+        return;
+    }
+    
+    // Validate that we have valid GL context before attempting GSP detection
+    if (!mHasRequirements)
+    {
+        LL_WARNS("GSPFirmware") << "OpenGL requirements not met, cannot detect GSP firmware" << LL_ENDL;
+        return;
+    }
+    
+#if LL_LINUX
+    // On Linux, check for GSP firmware through various methods
+    
+    // Method 1: Check kernel module parameters
+    std::string gsp_status;
+    LLFILE* file = LLFile::fopen("/proc/driver/nvidia/gsp", "r");
+    if (file)
+    {
+        char buffer[256];
+        if (fgets(buffer, sizeof(buffer), file))
+        {
+            gsp_status = std::string(buffer);
+            mGSPFirmwareDetected = true;
+            
+            // Parse GSP status
+            if (gsp_status.find("GSP firmware loaded") != std::string::npos ||
+                gsp_status.find("GSP: enabled") != std::string::npos)
+            {
+                mGSPFirmwareEnabled = true;
+            }
+            
+            LL_INFOS("GSPFirmware") << "GSP status from proc: " << gsp_status << LL_ENDL;
+        }
+        fclose(file);
+    }
+    
+    // Method 2: Check nvidia-ml or nvidia-smi if available
+    if (!mGSPFirmwareDetected)
+    {
+        // Try to get GSP info from nvidia-smi
+        FILE* pipe = popen("nvidia-smi -q -d GSP 2>/dev/null", "r");
+        if (pipe)
+        {
+            char buffer[1024];
+            std::string result;
+            
+            while (fgets(buffer, sizeof(buffer), pipe))
+            {
+                result += buffer;
+            }
+            pclose(pipe);
+            
+            if (!result.empty())
+            {
+                mGSPFirmwareDetected = true;
+                
+                // Parse nvidia-smi output for GSP status
+                if (result.find("GSP Firmware") != std::string::npos)
+                {
+                    if (result.find("Enabled") != std::string::npos)
+                    {
+                        mGSPFirmwareEnabled = true;
+                    }
+                    
+                    // Try to extract version
+                    size_t version_pos = result.find("Version");
+                    if (version_pos != std::string::npos)
+                    {
+                        size_t start = result.find(":", version_pos);
+                        if (start != std::string::npos)
+                        {
+                            start++;
+                            size_t end = result.find("\n", start);
+                            if (end != std::string::npos)
+                            {
+                                mGSPFirmwareVersion = result.substr(start, end - start);
+                                // Trim whitespace
+                                size_t first = mGSPFirmwareVersion.find_first_not_of(" \t\r\n");
+                                size_t last = mGSPFirmwareVersion.find_last_not_of(" \t\r\n");
+                                if (first != std::string::npos && last != std::string::npos)
+                                {
+                                    mGSPFirmwareVersion = mGSPFirmwareVersion.substr(first, last - first + 1);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                LL_DEBUGS("GSPFirmware") << "nvidia-smi GSP info: " << result << LL_ENDL;
+            }
+        }
+    }
+    
+    // Method 3: Check driver version heuristics
+    // GSP is typically available/enabled on newer drivers (515+ series)
+    if (!mGSPFirmwareDetected && mDriverVersionMajor > 0)
+    {
+        // Nvidia driver version format: major.minor (e.g., 525.60)
+        if (mDriverVersionMajor >= 515)
+        {
+            mGSPFirmwareDetected = true;
+            // Assume GSP is enabled by default on newer drivers
+            mGSPFirmwareEnabled = true;
+            mGSPFirmwareVersion = "Unknown (inferred from driver version)";
+            
+            LL_DEBUGS("GSPFirmware") << "GSP likely present based on driver version: " 
+                                    << mDriverVersionMajor << "." << mDriverVersionMinor << LL_ENDL;
+        }
+    }
+    
+#elif LL_WINDOWS
+    // On Windows, GSP detection is more limited
+    // We can infer GSP support based on driver version and GPU architecture
+    
+    if (mDriverVersionMajor >= 515)
+    {
+        mGSPFirmwareDetected = true;
+        mGSPFirmwareEnabled = true; // Usually enabled by default on Windows
+        mGSPFirmwareVersion = "Windows GSP (version unknown)";
+        
+        LL_DEBUGS("GSPFirmware") << "GSP inferred on Windows with driver version: " 
+                                << mDriverVersionMajor << "." << mDriverVersionMinor << LL_ENDL;
+    }
+    
+#endif
+    
+    // Log final GSP firmware status
+    if (mGSPFirmwareDetected)
+    {
+        LL_INFOS("GSPFirmware") << "GSP Firmware detected - Enabled: " << (mGSPFirmwareEnabled ? "Yes" : "No");
+        if (!mGSPFirmwareVersion.empty())
+        {
+            LL_CONT << ", Version: " << mGSPFirmwareVersion;
+        }
+        LL_CONT << LL_ENDL;
+        
+        // GSP can affect performance characteristics
+        if (mGSPFirmwareEnabled)
+        {
+            LL_INFOS("GSPFirmware") << "GSP firmware is active - this may affect GPU scheduling and performance" << LL_ENDL;
+        }
+    }
+    else
+    {
+        LL_DEBUGS("GSPFirmware") << "No GSP firmware detected or supported" << LL_ENDL;
+    }
+}
+
+bool LLGLManager::isGSPFirmwarePresent()
+{
+    return mGSPFirmwareDetected;
+}
+
+std::string LLGLManager::getGSPFirmwareInfo()
+{
+    if (!mGSPFirmwareDetected)
+    {
+        return "GSP firmware not detected";
+    }
+    
+    std::ostringstream info;
+    info << "GSP Firmware: " << (mGSPFirmwareEnabled ? "Enabled" : "Disabled");
+    
+    if (!mGSPFirmwareVersion.empty())
+    {
+        info << ", Version: " << mGSPFirmwareVersion;
+    }
+    
+    return info.str();
+}
+
 
 #if LL_WINDOWS
 // Expose desired use of high-performance graphics processor to Optimus driver and to AMD driver

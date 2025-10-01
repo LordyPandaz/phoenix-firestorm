@@ -515,7 +515,28 @@ void LLTexUnit::setTextureFilteringOption(LLTexUnit::eTextureFilterOptions optio
     {
         if (LLImageGL::sGlobalUseAnisotropic && option == TFO_ANISOTROPIC)
         {
-            glTexParameterf(sGLTextureType[mCurrTexType], GL_TEXTURE_MAX_ANISOTROPY, gGLManager.mMaxAnisotropy);
+            // Enhanced anisotropic filtering with quality-performance balance
+            F32 aniso_level = gGLManager.mMaxAnisotropy;
+            
+            // Apply performance optimization based on texture type
+            if (mCurrTexType == TT_CUBE_MAP || mCurrTexType == TT_CUBE_MAP_ARRAY)
+            {
+                // Reduce anisotropy for cube maps to improve performance
+                aniso_level = llmin(aniso_level, 8.0f);
+            }
+            else if (mCurrTexType == TT_TEXTURE_3D)
+            {
+                // 3D textures benefit less from anisotropy, use moderate level
+                aniso_level = llmin(aniso_level, 4.0f);
+            }
+            
+            glTexParameterf(sGLTextureType[mCurrTexType], GL_TEXTURE_MAX_ANISOTROPY, aniso_level);
+        }
+        else if (option == TFO_TRILINEAR)
+        {
+            // Apply light anisotropic filtering even for trilinear to improve quality
+            F32 light_aniso = llmin(gGLManager.mMaxAnisotropy, 2.0f);
+            glTexParameterf(sGLTextureType[mCurrTexType], GL_TEXTURE_MAX_ANISOTROPY, light_aniso);
         }
         else
         {
@@ -845,6 +866,9 @@ LLRender::LLRender()
     }
 
     mLightHash = 0;
+    
+    // Initialize state optimization system
+    mStateOptimizationEnabled = true;
 }
 
 LLRender::~LLRender()
@@ -901,6 +925,9 @@ bool LLRender::init(bool needs_vertex_buffer)
     stop_glerror();
     mMaxLineWidthSmooth = range[1];
     // </FS:Ansariel>
+    
+    // Initialize OpenGL state optimization system
+    initializeStateOptimization();
 
     return true;
 }
@@ -2166,4 +2193,389 @@ glm::vec3 mul_mat4_vec3(const glm::mat4& mat, const glm::vec3& vec)
     res.div(q);
     return glm::make_vec3(res.getF32ptr());
 #endif
+}
+
+// ============================================================================
+// OpenGL State Management Optimization Implementation
+// ============================================================================
+
+void LLRender::initializeStateOptimization()
+{
+    LL_INFOS("StateOptimization") << "Initializing OpenGL state management optimization" << LL_ENDL;
+    
+    mStateOptimizationEnabled = true; // Enable by default
+    
+    // Initialize state cache with current OpenGL state
+    resetStateCache();
+    
+    LL_INFOS("StateOptimization") << "State optimization system initialized" << LL_ENDL;
+}
+
+void LLRender::optimizedDepthFunc(GLenum func)
+{
+    if (!mStateOptimizationEnabled)
+    {
+        glDepthFunc(func);
+        return;
+    }
+    
+    if (mGLStateCache.mCachedDepthFunc != func)
+    {
+        mGLStateCache.mCachedDepthFunc = func;
+        mGLStateCache.mDepthFuncChanges++;
+        mGLStateCache.mTotalStateChanges++;
+        glDepthFunc(func);
+    }
+    else
+    {
+        mGLStateCache.mRedundantStateCalls++;
+    }
+}
+
+void LLRender::optimizedEnable(GLenum cap)
+{
+    if (!mStateOptimizationEnabled)
+    {
+        glEnable(cap);
+        return;
+    }
+    
+    bool state_changed = false;
+    
+    switch (cap)
+    {
+        case GL_DEPTH_TEST:
+            if (!mGLStateCache.mCachedDepthTest)
+            {
+                mGLStateCache.mCachedDepthTest = GL_TRUE;
+                state_changed = true;
+            }
+            break;
+            
+        case GL_BLEND:
+            if (!mGLStateCache.mCachedBlend)
+            {
+                mGLStateCache.mCachedBlend = GL_TRUE;
+                mGLStateCache.mBlendChanges++;
+                state_changed = true;
+            }
+            break;
+            
+        case GL_CULL_FACE:
+            if (!mGLStateCache.mCachedCullFaceEnable)
+            {
+                mGLStateCache.mCachedCullFaceEnable = GL_TRUE;
+                state_changed = true;
+            }
+            break;
+            
+        case GL_SCISSOR_TEST:
+            if (!mGLStateCache.mCachedScissorTest)
+            {
+                mGLStateCache.mCachedScissorTest = GL_TRUE;
+                state_changed = true;
+            }
+            break;
+            
+        default:
+            // For other states, always call through to avoid complexity
+            glEnable(cap);
+            mGLStateCache.mTotalStateChanges++;
+            return;
+    }
+    
+    if (state_changed)
+    {
+        mGLStateCache.mTotalStateChanges++;
+        glEnable(cap);
+    }
+    else
+    {
+        mGLStateCache.mRedundantStateCalls++;
+    }
+}
+
+void LLRender::optimizedDisable(GLenum cap)
+{
+    if (!mStateOptimizationEnabled)
+    {
+        glDisable(cap);
+        return;
+    }
+    
+    bool state_changed = false;
+    
+    switch (cap)
+    {
+        case GL_DEPTH_TEST:
+            if (mGLStateCache.mCachedDepthTest)
+            {
+                mGLStateCache.mCachedDepthTest = GL_FALSE;
+                state_changed = true;
+            }
+            break;
+            
+        case GL_BLEND:
+            if (mGLStateCache.mCachedBlend)
+            {
+                mGLStateCache.mCachedBlend = GL_FALSE;
+                mGLStateCache.mBlendChanges++;
+                state_changed = true;
+            }
+            break;
+            
+        case GL_CULL_FACE:
+            if (mGLStateCache.mCachedCullFaceEnable)
+            {
+                mGLStateCache.mCachedCullFaceEnable = GL_FALSE;
+                state_changed = true;
+            }
+            break;
+            
+        case GL_SCISSOR_TEST:
+            if (mGLStateCache.mCachedScissorTest)
+            {
+                mGLStateCache.mCachedScissorTest = GL_FALSE;
+                state_changed = true;
+            }
+            break;
+            
+        default:
+            // For other states, always call through to avoid complexity
+            glDisable(cap);
+            mGLStateCache.mTotalStateChanges++;
+            return;
+    }
+    
+    if (state_changed)
+    {
+        mGLStateCache.mTotalStateChanges++;
+        glDisable(cap);
+    }
+    else
+    {
+        mGLStateCache.mRedundantStateCalls++;
+    }
+}
+
+void LLRender::optimizedBlendFunc(GLenum sfactor, GLenum dfactor)
+{
+    if (!mStateOptimizationEnabled)
+    {
+        glBlendFunc(sfactor, dfactor);
+        return;
+    }
+    
+    if (mGLStateCache.mCachedBlendSrc != sfactor || mGLStateCache.mCachedBlendDst != dfactor)
+    {
+        mGLStateCache.mCachedBlendSrc = sfactor;
+        mGLStateCache.mCachedBlendDst = dfactor;
+        mGLStateCache.mBlendChanges++;
+        mGLStateCache.mTotalStateChanges++;
+        glBlendFunc(sfactor, dfactor);
+    }
+    else
+    {
+        mGLStateCache.mRedundantStateCalls++;
+    }
+}
+
+void LLRender::optimizedActiveTexture(GLenum texture)
+{
+    if (!mStateOptimizationEnabled)
+    {
+        glActiveTexture(texture);
+        return;
+    }
+    
+    if (mGLStateCache.mCachedActiveTexture != texture)
+    {
+        mGLStateCache.mCachedActiveTexture = texture;
+        mGLStateCache.mTextureChanges++;
+        mGLStateCache.mTotalStateChanges++;
+        glActiveTexture(texture);
+    }
+    else
+    {
+        mGLStateCache.mRedundantStateCalls++;
+    }
+}
+
+void LLRender::optimizedLineWidth(GLfloat width)
+{
+    if (!mStateOptimizationEnabled)
+    {
+        glLineWidth(width);
+        return;
+    }
+    
+    // Clamp to supported range
+    width = llclamp(width, 1.0f, mMaxLineWidthSmooth);
+    
+    if (fabs(mGLStateCache.mCachedLineWidth - width) > 0.001f)
+    {
+        mGLStateCache.mCachedLineWidth = width;
+        mGLStateCache.mTotalStateChanges++;
+        glLineWidth(width);
+    }
+    else
+    {
+        mGLStateCache.mRedundantStateCalls++;
+    }
+}
+
+void LLRender::optimizedScissor(GLint x, GLint y, GLsizei width, GLsizei height)
+{
+    if (!mStateOptimizationEnabled)
+    {
+        glScissor(x, y, width, height);
+        return;
+    }
+    
+    if (mGLStateCache.mCachedScissorBox[0] != x ||
+        mGLStateCache.mCachedScissorBox[1] != y ||
+        mGLStateCache.mCachedScissorBox[2] != width ||
+        mGLStateCache.mCachedScissorBox[3] != height)
+    {
+        mGLStateCache.mCachedScissorBox[0] = x;
+        mGLStateCache.mCachedScissorBox[1] = y;
+        mGLStateCache.mCachedScissorBox[2] = width;
+        mGLStateCache.mCachedScissorBox[3] = height;
+        mGLStateCache.mTotalStateChanges++;
+        glScissor(x, y, width, height);
+    }
+    else
+    {
+        mGLStateCache.mRedundantStateCalls++;
+    }
+}
+
+void LLRender::optimizedDepthMask(GLboolean flag)
+{
+    if (!mStateOptimizationEnabled)
+    {
+        glDepthMask(flag);
+        return;
+    }
+    
+    if (mGLStateCache.mCachedDepthMask != flag)
+    {
+        mGLStateCache.mCachedDepthMask = flag;
+        mGLStateCache.mTotalStateChanges++;
+        glDepthMask(flag);
+    }
+    else
+    {
+        mGLStateCache.mRedundantStateCalls++;
+    }
+}
+
+void LLRender::flushStateCache()
+{
+    if (!mStateOptimizationEnabled)
+        return;
+        
+    // Force all cached state to be applied to OpenGL
+    // This is useful when external code may have changed GL state
+    
+    glDepthFunc(mGLStateCache.mCachedDepthFunc);
+    
+    if (mGLStateCache.mCachedDepthTest)
+        glEnable(GL_DEPTH_TEST);
+    else
+        glDisable(GL_DEPTH_TEST);
+        
+    glDepthMask(mGLStateCache.mCachedDepthMask);
+    
+    if (mGLStateCache.mCachedBlend)
+        glEnable(GL_BLEND);
+    else
+        glDisable(GL_BLEND);
+        
+    glBlendFunc(mGLStateCache.mCachedBlendSrc, mGLStateCache.mCachedBlendDst);
+    
+    if (mGLStateCache.mCachedCullFaceEnable)
+        glEnable(GL_CULL_FACE);
+    else
+        glDisable(GL_CULL_FACE);
+        
+    glLineWidth(mGLStateCache.mCachedLineWidth);
+    
+    if (mGLStateCache.mCachedScissorTest)
+        glEnable(GL_SCISSOR_TEST);
+    else
+        glDisable(GL_SCISSOR_TEST);
+        
+    glScissor(mGLStateCache.mCachedScissorBox[0], mGLStateCache.mCachedScissorBox[1],
+             mGLStateCache.mCachedScissorBox[2], mGLStateCache.mCachedScissorBox[3]);
+    
+    glActiveTexture(mGLStateCache.mCachedActiveTexture);
+    
+    LL_DEBUGS("StateOptimization") << "Flushed OpenGL state cache" << LL_ENDL;
+}
+
+void LLRender::resetStateCache()
+{
+    if (!mStateOptimizationEnabled)
+        return;
+        
+    // Reset cache counters but preserve current GL state knowledge
+    mGLStateCache.mDepthFuncChanges = 0;
+    mGLStateCache.mBlendChanges = 0;
+    mGLStateCache.mTextureChanges = 0;
+    mGLStateCache.mTotalStateChanges = 0;
+    mGLStateCache.mRedundantStateCalls = 0;
+    
+    // Query current OpenGL state to sync cache
+    GLint depth_func;
+    glGetIntegerv(GL_DEPTH_FUNC, &depth_func);
+    mGLStateCache.mCachedDepthFunc = (GLenum)depth_func;
+    
+    mGLStateCache.mCachedDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    mGLStateCache.mCachedBlend = glIsEnabled(GL_BLEND);
+    mGLStateCache.mCachedCullFaceEnable = glIsEnabled(GL_CULL_FACE);
+    mGLStateCache.mCachedScissorTest = glIsEnabled(GL_SCISSOR_TEST);
+    
+    GLboolean depth_mask;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+    mGLStateCache.mCachedDepthMask = depth_mask;
+    
+    GLint blend_src, blend_dst;
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend_src);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &blend_dst);
+    mGLStateCache.mCachedBlendSrc = (GLenum)blend_src;
+    mGLStateCache.mCachedBlendDst = (GLenum)blend_dst;
+    
+    GLfloat line_width;
+    glGetFloatv(GL_LINE_WIDTH, &line_width);
+    mGLStateCache.mCachedLineWidth = line_width;
+    
+    GLint active_texture;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &active_texture);
+    mGLStateCache.mCachedActiveTexture = (GLenum)active_texture;
+    
+    glGetIntegerv(GL_SCISSOR_BOX, mGLStateCache.mCachedScissorBox);
+    
+    LL_DEBUGS("StateOptimization") << "Reset OpenGL state cache" << LL_ENDL;
+}
+
+void LLRender::logStateOptimizationStats()
+{
+    if (!mStateOptimizationEnabled)
+        return;
+        
+    U32 total_calls = mGLStateCache.mTotalStateChanges + mGLStateCache.mRedundantStateCalls;
+    if (total_calls == 0)
+        return;
+        
+    F32 redundancy_rate = (F32)mGLStateCache.mRedundantStateCalls / total_calls * 100.0f;
+    
+    LL_INFOS("StateOptimization") << "OpenGL State Optimization Stats: " 
+                                 << "Total calls: " << total_calls
+                                 << ", Actual changes: " << mGLStateCache.mTotalStateChanges
+                                 << ", Redundant avoided: " << mGLStateCache.mRedundantStateCalls 
+                                 << " (" << redundancy_rate << "%)"
+                                 << ", Depth: " << mGLStateCache.mDepthFuncChanges
+                                 << ", Blend: " << mGLStateCache.mBlendChanges
+                                 << ", Texture: " << mGLStateCache.mTextureChanges << LL_ENDL;
 }
