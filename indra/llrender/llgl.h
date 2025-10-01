@@ -262,8 +262,16 @@ void update_gpu_performance_stats(); // Update frame time and error statistics
 void reset_gpu_performance_stats(); // Reset performance counters
 void log_gpu_performance_summary(); // Log performance summary
 
+// Conditionally define stop_glerror for performance
+// On Linux Release builds, eliminate the overhead entirely like GL debug output
+// On Darwin and Debug builds, keep error checking active
+#if defined(LL_LINUX) && !defined(_DEBUG)
+# define stop_glerror()
+# define llglassertok()
+#else
 # define stop_glerror() assert_glerror()
 # define llglassertok() assert_glerror()
+#endif
 
 // stop_glerror is still needed on OS X but has performance implications
 // use macro below to conditionally add stop_glerror to non-release builds

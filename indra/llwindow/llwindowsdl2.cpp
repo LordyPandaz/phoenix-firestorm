@@ -1011,13 +1011,21 @@ void LLWindowSDL::hide()
 //virtual
 void LLWindowSDL::minimize()
 {
-    // *FIX: What to do with SDL?
+    if (mWindow)
+    {
+        SDL_MinimizeWindow(mWindow);
+        mIsMinimized = 1;
+    }
 }
 
 //virtual
 void LLWindowSDL::restore()
 {
-    // *FIX: What to do with SDL?
+    if (mWindow)
+    {
+        SDL_RestoreWindow(mWindow);
+        mIsMinimized = 0;
+    }
 }
 
 
@@ -1074,7 +1082,8 @@ bool LLWindowSDL::getMaximized()
 
     if (mWindow)
     {
-        // TODO
+        U32 flags = SDL_GetWindowFlags(mWindow);
+        result = (flags & SDL_WINDOW_MAXIMIZED) != 0;
     }
 
     return(result);
@@ -1082,7 +1091,11 @@ bool LLWindowSDL::getMaximized()
 
 bool LLWindowSDL::maximize()
 {
-    // TODO
+    if (mWindow)
+    {
+        SDL_MaximizeWindow(mWindow);
+        return true;
+    }
     return false;
 }
 
@@ -2363,8 +2376,8 @@ void LLWindowSDL::initCursors(bool useLegacyCursors) // <FS:LO> Legacy cursor se
     mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_END_ADD] = makeSDLCursorFromBMP("lltoolpathfindingpathendadd.BMP", 16, 16);
     mSDLCursors[UI_CURSOR_TOOLNO] = makeSDLCursorFromBMP("llno.BMP",8,8);
 
-    if (getenv("LL_ATI_MOUSE_CURSOR_BUG") != NULL && !gGLManager.mIsNVIDIA) {
-        LL_INFOS() << "Disabling cursor updating due to LL_ATI_MOUSE_CURSOR_BUG (ATI/AMD GPU detected)" << LL_ENDL;
+    if (getenv("LL_ATI_MOUSE_CURSOR_BUG") != NULL) {
+        LL_INFOS() << "Disabling cursor updating due to LL_ATI_MOUSE_CURSOR_BUG environment variable" << LL_ENDL;
         ATIbug = true;
     }
 }

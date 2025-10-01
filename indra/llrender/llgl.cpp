@@ -1540,10 +1540,12 @@ bool LLGLManager::initGL()
 
     // Suppress GL debug messages on Linux Release builds to prevent performance degradation
     // Keep enabled in Debug builds for development
+    // Note: stop_glerror() macro is also compiled out on Linux Release builds (see llgl.h)
 #if defined(LL_LINUX) && !defined(_DEBUG)
     if (glDebugMessageCallback && mHasDebugOutput)
     {
         LL_INFOS("RenderInit") << "Disabling OpenGL debug output for Linux Release build performance" << LL_ENDL;
+        LL_INFOS("RenderInit") << "stop_glerror() calls also compiled out for maximum performance" << LL_ENDL;
         glDebugMessageCallback(NULL, NULL);
         glDisable(GL_DEBUG_OUTPUT);
         glDisable(GL_DEBUG_OUTPUT_SYNCHRONOUS);

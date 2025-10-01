@@ -103,27 +103,10 @@ void LLRenderSphere::renderGGL()
     }
 
 
-    if (LLGLSLShader::sCurBoundShaderPtr->mAttributeMask == LLVertexBuffer::MAP_VERTEX)
-    { // shader expects only vertex positions in vertex buffer, use fast path
-        mVertexBuffer->setBuffer();
-        mVertexBuffer->drawRange(LLRender::TRIANGLES, 0, mVertexBuffer->getNumVerts(), mVertexBuffer->getNumIndices(), 0);
-    }
-    else
-    { //shader wants colors in the vertex stream, use slow path
-        gGL.begin(LLRender::TRIANGLES);
-        for (S32 lat_i = 0; lat_i < LATITUDE_SLICES; lat_i++)
-        {
-            for (S32 lon_i = 0; lon_i < LONGITUDE_SLICES; lon_i++)
-            {
-                gGL.vertex3fv(mSpherePoints[lat_i][lon_i].mV);
-                gGL.vertex3fv(mSpherePoints[lat_i][lon_i + 1].mV);
-                gGL.vertex3fv(mSpherePoints[lat_i + 1][lon_i].mV);
-
-                gGL.vertex3fv(mSpherePoints[lat_i + 1][lon_i].mV);
-                gGL.vertex3fv(mSpherePoints[lat_i][lon_i + 1].mV);
-                gGL.vertex3fv(mSpherePoints[lat_i + 1][lon_i + 1].mV);
-            }
-        }
-        gGL.end();
-    }
+    // Always use vertex buffer for optimal performance
+    // Old slow path used immediate mode (gGL.begin/vertex3fv/end) for shaders with color attributes
+    // But since we only provide positions, vertex buffer is faster regardless of shader attributes
+    // Colors will come from uniform state or shader defaults
+    mVertexBuffer->setBuffer();
+    mVertexBuffer->drawRange(LLRender::TRIANGLES, 0, mVertexBuffer->getNumVerts(), mVertexBuffer->getNumIndices(), 0);
 }
