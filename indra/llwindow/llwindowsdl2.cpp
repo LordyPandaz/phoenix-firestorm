@@ -3215,7 +3215,7 @@ void LLWindowSDL::allowLanguageTextInput(LLPreeditor *preeditor, bool b)
 
 void LLWindowSDL::initializeFramePacing()
 {
-    mFramePacingEnabled = true;  // Enable by default, can be controlled by settings
+    mFramePacingEnabled = false;  // Disabled - VSync handles timing when needed, uncapped FPS otherwise
     mTargetFrameTime = 1.0 / 60.0; // Default 60 FPS target (16.67ms)
     mLastFrameTime = LLTimer::getElapsedSeconds();
     mFrameTimeAccumulator = 0.0;
