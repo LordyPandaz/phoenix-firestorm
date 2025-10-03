@@ -3639,8 +3639,9 @@ void LLGLManager::updateMemoryPressure()
 
     mLastMemoryPressureCheck.store(current_time);
 
-    // Update current VRAM stats
-    updateVRAMStats();
+    // THREAD SAFETY: updateVRAMStats() removed - it requires OpenGL context (render thread only)
+    // VRAM stats are now updated separately by the render thread
+    // We use cached mCurrentVRAM values here which are thread-safe atomics
 
     // Calculate memory pressure level based on multiple factors
     U32 old_pressure_level = mMemoryPressureLevel;
@@ -3858,8 +3859,34 @@ bool LLGLManager::checkVRAMPressure()
 
 void LLGLManager::updateVRAMStats()
 {
-    // Get current available VRAM using various methods
-    mCurrentVRAM.store(getCurrentVRAM());
+    // THREAD SAFETY: This function MUST be called from render thread only
+    // It makes OpenGL calls via getCurrentVRAM()
+
+    // Get previous VRAM value for eviction detection
+    U32 prev_vram = mCurrentVRAM.load();
+
+    // Get fresh VRAM reading (requires OpenGL context)
+    U32 current_vram = getCurrentVRAM();
+
+    // Detect potential evictions by monitoring VRAM drops
+    if (prev_vram > 0 && current_vram < prev_vram)
+    {
+        U32 vram_drop = prev_vram - current_vram;
+
+        // If VRAM dropped by more than 64MB, count as eviction event
+        if (vram_drop > 64)
+        {
+            // Estimate evictions based on VRAM drop (rough heuristic: 1 eviction per 32MB lost)
+            U32 estimated_evictions = vram_drop / 32;
+            mTextureEvictionCount.fetch_add(estimated_evictions);
+
+            LL_DEBUGS("VRAMEviction") << "Detected texture evictions: " << estimated_evictions
+                                     << " (VRAM dropped " << vram_drop << " MB)" << LL_ENDL;
+        }
+    }
+
+    // Update cached VRAM value for use by other threads
+    mCurrentVRAM.store(current_vram);
 }
 
 U32 LLGLManager::getCurrentVRAM()
@@ -3916,31 +3943,13 @@ U32 LLGLManager::getEvictionCount()
     {
         mLastEvictionCheck.store(current_time);
 
-        // Detect potential evictions by monitoring VRAM changes
-        U32 current_vram = getCurrentVRAM();
-        U32 prev_vram = mCurrentVRAM.load();
+        // THREAD SAFETY: Cannot detect evictions based on VRAM drops here because
+        // getCurrentVRAM() requires OpenGL context (render thread only).
+        // VRAM-based eviction detection has been moved to updateVRAMStats() which
+        // is called from the render thread. Here we only detect evictions based
+        // on memory pressure state.
 
-        // If VRAM availability dropped significantly, assume texture eviction occurred
-        if (prev_vram > 0 && current_vram < prev_vram)
-        {
-            U32 vram_drop = prev_vram - current_vram;
-
-            // If VRAM dropped by more than 64MB, count as eviction event
-            if (vram_drop > 64)
-            {
-                // Estimate evictions based on VRAM drop (rough heuristic: 1 eviction per 32MB lost)
-                U32 estimated_evictions = vram_drop / 32;
-                mTextureEvictionCount.fetch_add(estimated_evictions);
-
-                LL_DEBUGS("VRAMEviction") << "Detected texture evictions: " << estimated_evictions
-                                         << " (VRAM dropped " << vram_drop << " MB)" << LL_ENDL;
-            }
-        }
-
-        // Update current VRAM for next comparison
-        mCurrentVRAM.store(current_vram);
-
-        // Additional eviction detection: high memory pressure indicates likely evictions
+        // Eviction detection: high memory pressure indicates likely evictions
         if (mMemoryPressureDetected.load() && mMemoryPressureLevel >= 3)
         {
             // Count one eviction for high/critical pressure states
@@ -3955,6 +3964,9 @@ U32 LLGLManager::getEvictionCount()
 
 bool LLGLManager::checkContextLoss()
 {
+    // THREAD SAFETY: OpenGL calls must be made from the render thread only
+    llassert_always_msg(on_main_thread(), "checkContextLoss() called from non-render thread - glGetError() requires render thread!");
+
     // Check for OpenGL context loss
     GLenum error = glGetError();
 

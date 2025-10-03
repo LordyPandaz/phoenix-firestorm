@@ -1721,6 +1721,10 @@ void swap()
     static LLFrameTimer memory_pressure_timer;
     if (memory_pressure_timer.getElapsedTimeF32() > 2.0f) // Check every 2 seconds
     {
+        // Update VRAM stats first (requires render thread for OpenGL calls)
+        gGLManager.updateVRAMStats();
+
+        // Then check memory pressure using updated stats
         gGLManager.updateMemoryPressure();
         memory_pressure_timer.reset();
     }
