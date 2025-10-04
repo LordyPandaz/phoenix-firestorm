@@ -43,6 +43,7 @@
 #include "llplane.h"
 #include "llgltypes.h"
 #include "llinstancetracker.h"
+#include "llframetimer.h"
 
 #include "llglheaders.h"
 #include "glm/mat4x4.hpp"
@@ -77,7 +78,7 @@ public:
 
     std::string getRawGLString(); // For sending to simulator
 
-    bool mInited;
+    std::atomic<bool> mInited;  // Thread-safe: Can be read from multiple threads during shutdown
     bool mIsDisabled;
 
     // OpenGL limits
@@ -176,6 +177,8 @@ public:
     void asLLSD(LLSD& info);
     
     // VRAM monitoring functions
+    static constexpr F32 VRAM_MONITOR_INTERVAL = 2.0f; // Check VRAM every 2 seconds
+    void updateVRAMMonitoring(); // Main VRAM monitoring entry point (called from swap)
     bool checkVRAMPressure();
     void updateVRAMStats();
     U32 getCurrentVRAM();
@@ -235,6 +238,9 @@ public:
 private:
     void initExtensions();
     void initGLStates();
+
+    // VRAM monitoring
+    LLFrameTimer mVRAMMonitorTimer; // Timer for periodic VRAM stats updates
 };
 
 extern LLGLManager gGLManager;

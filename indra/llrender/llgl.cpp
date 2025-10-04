@@ -56,6 +56,7 @@
 #include "m4math.h"
 #include "llstring.h"
 #include "llstacktrace.h"
+#include "llapp.h"
 
 #include "llglheaders.h"
 #include "llglslshader.h"
@@ -1038,6 +1039,8 @@ LLGLManager::LLGLManager() :
     mGLMaxVertexRange(0),
     mGLMaxIndexRange(0)
 {
+    // Start VRAM monitoring timer
+    mVRAMMonitorTimer.reset();
 }
 
 //---------------------------------------------------------------------
@@ -1693,6 +1696,9 @@ void LLGLManager::shutdownGL()
 {
     if (mInited)
     {
+        // Stop VRAM monitoring before destroying OpenGL context
+        mVRAMMonitorTimer.pause();
+
         // Use glFlush() instead of glFinish() to avoid blocking on GPU completion
         // The OS will clean up GPU resources on process exit regardless
         // This saves 100-500ms of unnecessary waiting during shutdown
@@ -3857,6 +3863,49 @@ bool LLGLManager::checkVRAMPressure()
     return mMemoryPressureDetected.load();
 }
 
+void LLGLManager::updateVRAMMonitoring()
+{
+    // VRAM Monitoring Entry Point - Called from swap() every frame
+    // Industry standard: Encapsulates all VRAM monitoring logic with proper safety checks
+
+    // Don't monitor during application shutdown
+    if (LLApp::isExiting())
+    {
+        return;
+    }
+
+    // Check if it's time to update (configurable interval)
+    if (mVRAMMonitorTimer.getElapsedTimeF32() < VRAM_MONITOR_INTERVAL)
+    {
+        return; // Not time yet
+    }
+
+    // CRITICAL: Verify OpenGL context is valid AND we're on render thread
+    // Industry standard: Always check mInited before making GL calls
+    if (mInited && on_main_thread())
+    {
+        // Safe to make OpenGL calls - context is valid and we're on correct thread
+        updateVRAMStats();
+    }
+    else if (!mInited)
+    {
+        // OpenGL has been shutdown - stop trying to update VRAM stats
+        LL_DEBUGS_ONCE("GPUMemory") << "OpenGL shutdown - skipping VRAM update" << LL_ENDL;
+    }
+    else if (!on_main_thread())
+    {
+        // Wrong thread - should never happen but defend anyway
+        LL_WARNS_ONCE("GPUMemory") << "updateVRAMMonitoring() called from non-render thread - skipping VRAM update" << LL_ENDL;
+    }
+
+    // Always check memory pressure using cached atomic values (thread-safe)
+    // This is safe even without OpenGL context as it uses atomics
+    updateMemoryPressure();
+
+    // Reset timer for next cycle
+    mVRAMMonitorTimer.reset();
+}
+
 void LLGLManager::updateVRAMStats()
 {
     // THREAD SAFETY: This function MUST be called from render thread only
@@ -3892,7 +3941,19 @@ void LLGLManager::updateVRAMStats()
 U32 LLGLManager::getCurrentVRAM()
 {
     // THREAD SAFETY: OpenGL calls must be made from the render thread only
-    // This function calls glGetIntegerv() which requires valid GL context
+    // SHUTDOWN SAFETY: OpenGL context must be valid (mInited == true)
+    // Industry standard: Check both context validity and thread before GL calls
+
+    // Defense in depth: Check context validity first
+    if (LL_UNLIKELY(!mInited))
+    {
+        LL_WARNS_ONCE("GPUMemory") << "getCurrentVRAM() called after OpenGL shutdown - returning cached value" << LL_ENDL;
+        // Return cached value if available, otherwise conservative estimate
+        U32 cached = mCurrentVRAM.load();
+        return (cached > 0) ? cached : (U32)(mVRAM * 0.3f);
+    }
+
+    // Then check thread safety
     llassert_always_msg(on_main_thread(), "getCurrentVRAM() called from non-render thread - OpenGL calls require render thread!");
 
     U32 available_vram = 0;
@@ -3904,13 +3965,13 @@ U32 LLGLManager::getCurrentVRAM()
         GLint total_mem = 0, available_mem = 0;
         glGetIntegerv(GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX, &total_mem);
         glGetIntegerv(GL_GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX, &available_mem);
-        
+
         if (available_mem > 0)
         {
             available_vram = available_mem / 1024; // Convert KB to MB
         }
     }
-    
+
     // Method 2: Use GL_ATI_meminfo for AMD
     else if (mHasATIMemInfo && mIsAMD)
     {
@@ -3922,14 +3983,14 @@ U32 LLGLManager::getCurrentVRAM()
         }
     }
 #endif
-    
+
     // Fallback: Estimate based on total VRAM and current usage
     if (available_vram == 0 && mVRAM > 0)
     {
         // Conservative estimate: assume 30% of total VRAM is available
         available_vram = (U32)(mVRAM * 0.3f);
     }
-    
+
     return available_vram;
 }
 

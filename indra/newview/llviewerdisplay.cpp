@@ -1718,16 +1718,8 @@ void swap()
     }
     
     // Update GPU memory pressure monitoring
-    static LLFrameTimer memory_pressure_timer;
-    if (memory_pressure_timer.getElapsedTimeF32() > 2.0f) // Check every 2 seconds
-    {
-        // Update VRAM stats first (requires render thread for OpenGL calls)
-        gGLManager.updateVRAMStats();
-
-        // Then check memory pressure using updated stats
-        gGLManager.updateMemoryPressure();
-        memory_pressure_timer.reset();
-    }
+    // All monitoring logic encapsulated in LLGLManager for better architecture
+    gGLManager.updateVRAMMonitoring();
     
     // Update shader cache statistics
     static LLFrameTimer shader_cache_timer;
